@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"time"
-	"github.com/pangogod/pkg/scscanner"
+	"pohek/scscanner"
 	"github.com/thatisuday/commando"
 )
 
@@ -27,8 +27,9 @@ func main() {
 		AddFlag("useragent", "set custom useragent", commando.String, "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83 Safari/537.36").
 		AddFlag("threads, t", "number of concurrent threads", commando.Int, 15).
 		AddFlag("retry", "max retries", commando.Int, 1).
-		AddFlag("output", "path to file to save results", commando.String, "no.no").
-		//AddFlag("proxy", "proxy server (<http://PROXY>)", commando.String, "no.no").
+		AddFlag("output", "path to output directory", commando.String, "no.no").
+		AddFlag("proxy", "proxy server from env variable", commando.Bool, nil).
+		AddFlag("proxy-url", "proxy server from env variable", commando.String, "proxy").
 		SetAction(func(args map[string]commando.ArgValue, flags map[string]commando.FlagValue) {
 			basehost := args["basehost"].Value
 			wordlist := args["wordlist"].Value
@@ -43,9 +44,10 @@ func main() {
 			insecure, _ := flags["insecure"].GetBool()
 			method, _ := flags["method"].GetString()
 			urlfile, _ := flags["urlfile"].GetBool()
-			//proxy, _ := flags["proxy"].GetString()
-			var sc SCScanner
-			config := core.NewOptions()
+			proxy, _ := flags["proxy"].GetBool()
+			proxyurl, _ := flags["proxy-url"].GetString()
+			var sc scscanner.SCScanner
+			config := scscanner.NewOptions()
 			config.Hostname = basehost
 			config.Wordlist = wordlist
 			config.Port = port
@@ -58,7 +60,9 @@ func main() {
 			config.NoTLSValidation = insecure
 			config.Method = method
 			config.URLsFile = urlfile
-			//config.Proxy = proxy
+			config.Proxy = proxy
+			config.ProxyUrl = proxyurl
+			config.OutputDir = output
 			sc.Opts = config
 			sc.Results = make([]string, 0)
 			//sc.Printer = &core.Printer{config}
@@ -72,18 +76,18 @@ func main() {
 				}
 				fl, erro := os.Create(output)
 				if erro != nil {
-					fmt.Printf("[!] Unable to create file %s\n", output)
+					fmt.Printf("[!] Unable to create output directory %s\n", output)
 					os.Exit(0)
 				}
 				fl.Close()
 				os.Remove(output)
-				sc.run()
-				if output != "no" {
-					err := sc.WriteResults(output)
+				sc.Run()
+				if output != "no.no" {
+					err := sc.WriteResults()
 					if err != nil {
-						fmt.Printf("\n[!] unable to save results to file to %s\n", output)
+						fmt.Printf("\n[!] unable to save results to directory to %s\n", output)
 					} else {
-						fmt.Printf("\n[+] results saved to file %s\n", output)
+						fmt.Printf("\n[+] results saved to directory %s\n", output)
 					}
 				}
 			} else {
@@ -94,18 +98,18 @@ func main() {
 				}
 				fl, erro := os.Create(output)
 				if erro != nil {
-					fmt.Printf("[!] Unable to create file %s\n", output)
+					fmt.Printf("[!] Unable to create directory %s\n", output)
 					os.Exit(0)
 				}
 				fl.Close()
 				os.Remove(output)
-				sc.run()
-				if output != "no" {
-					err := sc.WriteResults(output)
+				sc.Run()
+				if output != "no.no" {
+					err := sc.WriteResults()
 					if err != nil {
-						fmt.Printf("\n[!] unable to save results to file to %s\n", output)
+						fmt.Printf("\n[!] unable to save results to directory to %s\n", output)
 					} else {
-						fmt.Printf("\n[+] results saved to file %s\n", output)
+						fmt.Printf("\n[+] results saved to directory %s\n", output)
 					}
 				}
 			}
