@@ -12,7 +12,7 @@ const (
 )
 
 type Printer struct {
-//	Opts *Options
+	//	Opts *Options
 }
 
 func (p *Printer) PrintBanner() {
@@ -49,7 +49,7 @@ ___________________________________________
 // }
 
 func (p *Printer) PrintProg(vhostsNum int, scanned int) {
-	fmt.Fprintf(os.Stderr, "%sProgress: [%d/%d]", CR, scanned, vhostsNum)
+	fmt.Fprintf(os.Stderr, "%sProgress: [%d/%d] \n", CR, scanned, vhostsNum)
 }
 
 func (p *Printer) PrintRes(vhost string, size int64, status int) {

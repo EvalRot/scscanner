@@ -14,6 +14,7 @@ type Response struct {
 	ContentType string
 	StatusCode  int
 	Body        []byte
+	Request     *http.Request
 }
 
 type HttpErr struct {
@@ -31,13 +32,13 @@ type HTTPClient struct {
 	headers   []HTTPHeader
 	cookies   string
 	method    string
-	delay bool
+	delay     bool
 }
 
 func NewHTTPClient(opt *Options) (*HTTPClient, error) {
 	var client HTTPClient
 	client.delay = false
-	proxyURL := http.ProxyFromEnvironment 
+	proxyURL := http.ProxyFromEnvironment
 	if opt == nil {
 		return nil, fmt.Errorf("options is nil")
 	}
@@ -65,12 +66,12 @@ func NewHTTPClient(opt *Options) (*HTTPClient, error) {
 	}
 	if opt.Proxy {
 		customtransport.Proxy = proxyURL
-	} 
+	}
 
 	client.client = &http.Client{
 		Timeout:       opt.Timeout,
 		CheckRedirect: redirectFunc,
-		Transport: customtransport,
+		Transport:     customtransport,
 	}
 
 	client.userAgent = opt.UserAgent
@@ -99,7 +100,7 @@ func (client *HTTPClient) AddDelay() {
 	if !client.delay {
 		client.delay = true
 	}
-	
+
 }
 
 func (client *HTTPClient) CreateResponse(hostname string, urlPath string) (*Response, error) {
@@ -125,6 +126,7 @@ func (client *HTTPClient) CreateResponse(hostname string, urlPath string) (*Resp
 
 	resp, err := client.client.Do(req)
 	if err != nil {
+
 		return &Response{}, err
 	}
 	defer resp.Body.Close()
@@ -134,6 +136,7 @@ func (client *HTTPClient) CreateResponse(hostname string, urlPath string) (*Resp
 	target_response.ContentType = resp.Header.Get("Content-Type")
 	target_response.StatusCode = resp.StatusCode
 	target_response.Body = body
+	target_response.Request = resp.Request
 	if client.delay {
 		delay := 1 * time.Second
 		time.Sleep(delay)
