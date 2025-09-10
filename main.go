@@ -12,7 +12,7 @@ import (
     "pohek/internal/config"
     "pohek/internal/engine"
     "pohek/internal/httpx"
-    "pohek/internal/modules/sct"
+    "pohek/internal/modules/scpt"
     "pohek/internal/output"
     "pohek/internal/payload"
 )
@@ -39,6 +39,7 @@ func main() {
 		AddFlag("output", "path to output directory", commando.String, "no.no").
 		AddFlag("proxy", "proxy server from env variable", commando.Bool, nil).
 		AddFlag("proxy-url", "proxy server from env variable", commando.String, "proxy").
+		AddFlag("scpt", "enable Secondary Context Path Traversal module", commando.Bool, true).
         SetAction(func(args map[string]commando.ArgValue, flags map[string]commando.FlagValue) {
             // Gather CLI values
             basehost := args["basehost"].Value
@@ -86,9 +87,19 @@ func main() {
             pay := payload.NewDefault()
             sink := output.JSONLSink{OutputDir: opt.OutputDir}
 
-            // Prepare engine with current SCT module; future modules can be appended here
+            // Prepare engine with modules controlled by CLI flags
             deps := engine.Deps{Opts: opt, Client: client, Payloads: pay, Sink: sink}
-            eng := &engine.Engine{Deps: deps, Modules: []engine.Module{ sct.Module{} }}
+            modules := []engine.Module{}
+            scptEnabled, _ := flags["scpt"].GetBool()
+            if scptEnabled {
+                modules = append(modules, scpt.Module{})
+            }
+            if len(modules) == 0 {
+                fmt.Println("[!] no modules enabled; enable with --scpt")
+                os.Exit(1)
+            }
+            eng := &engine.Engine{Deps: deps, Modules: modules}
+
 
             // Run with a cancellable context to enable future graceful shutdowns
             ctx := context.Background()

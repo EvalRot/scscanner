@@ -1,4 +1,4 @@
-package sct
+package scpt
 
 import (
     "context"
@@ -19,14 +19,14 @@ import (
 // It reuses shared dependencies (HTTP client, payload source, detector, sink) passed via engine.Deps.
 type Module struct{}
 
-func (Module) Name() string { return "sct" }
+func (Module) Name() string { return "scpt" }
 
 // Run performs SCT scanning for targets derived from the provided options and wordlist.
 // It builds multiple baselines (root/parent/dummy/nonexistent) to reduce false positives
 // and performs module-specific detection heuristics.
 // Process runs SCT payloads for a single target, using the provided base response as baseline.
 func (Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, base *httpx.Response) error {
-    fmt.Printf("[sct] scanning %s%s\n", t.BaseURL, t.Path)
+    fmt.Printf("[scpt] scanning %s%s\n", t.BaseURL, t.Path)
     threads := deps.Opts.Threads
     if threads <= 0 { threads = 1 }
 
@@ -147,7 +147,7 @@ func worker(ctx context.Context, deps engine.Deps, baseURL string, baseResp *htt
 
 func emitFinding(deps engine.Deps, baseURL, path, payload string, resp *httpx.Response, statusDiff, serverDiff, contentTypeDiff bool, notes []string, mu *sync.Mutex) {
     f := &output.Finding{
-        Module:      "sct",
+        Module:      "scpt",
         Timestamp:   time.Now(),
         Host:        baseURL,
         Path:        path,
