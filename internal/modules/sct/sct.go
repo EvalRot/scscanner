@@ -1,12 +1,10 @@
 package sct
 
 import (
-    "bufio"
     "context"
     "fmt"
     "math/rand"
     "net/url"
-    "os"
     "strings"
     "sync"
     "time"
@@ -26,84 +24,48 @@ func (Module) Name() string { return "sct" }
 // Run performs SCT scanning for targets derived from the provided options and wordlist.
 // It builds multiple baselines (root/parent/dummy/nonexistent) to reduce false positives
 // and performs module-specific detection heuristics.
-func (Module) Run(ctx context.Context, deps engine.Deps) error {
-    // Build target map: host -> paths
-    targets, err := loadTargets(deps)
-    if err != nil {
-        return err
-    }
-
-    // Prepare global concurrency
+// Process runs SCT payloads for a single target, using the provided base response as baseline.
+func (Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, base *httpx.Response) error {
+    fmt.Printf("[sct] scanning %s%s\n", t.BaseURL, t.Path)
     threads := deps.Opts.Threads
-    if threads <= 0 {
-        threads = 1
+    if threads <= 0 { threads = 1 }
+
+    // Prepare dummy responses for each payload using a never-existing marker
+    dummyMarker := "/gachimuchicheburek/"
+    dummyPayloads := deps.Payloads.BuildTraversal(dummyMarker)
+    dummyResponses := make([]*httpx.Response, 0, len(dummyPayloads))
+    filteredPayloads := make([]string, 0, len(dummyPayloads))
+    for i, p := range dummyPayloads {
+        dr, derr := deps.Client.Do(t.BaseURL, p)
+        if derr != nil { continue }
+        // Skip payloads that the app consistently blocks with 403 while base is allowed
+        if dr.StatusCode != 403 || base.StatusCode == 403 {
+            dummyResponses = append(dummyResponses, dr)
+            filteredPayloads = append(filteredPayloads, deps.Payloads.Items()[i])
+        }
     }
+    if len(dummyResponses) == 0 { return nil }
 
-    for host, paths := range targets {
-        fmt.Printf("Running scan for %s: %d paths\n", host, len(paths))
-
-        // Root baseline
-        rootResp, err := deps.Client.Do(host, "")
-        if err != nil {
-            fmt.Printf("[!] Cannot reach %s: %v\n", host, err)
-            continue
-        }
-
-        // Precompute dummy responses for each payload using a never-existing marker
-        dummyMarker := "/gachimuchicheburek/"
-        dummyPayloads := deps.Payloads.BuildTraversal(dummyMarker)
-        dummyResponses := make([]*httpx.Response, 0, len(dummyPayloads))
-        filteredPayloads := make([]string, 0, len(dummyPayloads))
-        deps.Client.SetRedirects(false)
-        for i, p := range dummyPayloads {
-            dr, derr := deps.Client.Do(host, p)
-            if derr != nil {
-                continue
-            }
-            // Skip payloads that the app consistently blocks with 403 while root is allowed
-            if dr.StatusCode != 403 || rootResp.StatusCode == 403 {
-                dummyResponses = append(dummyResponses, dr)
-                filteredPayloads = append(filteredPayloads, deps.Payloads.Items()[i])
-            }
-        }
-        if len(dummyResponses) == 0 {
-            fmt.Println("[!] Target appears to block traversal completely; skipping host")
-            continue
-        }
-
-        // Worker pool
-        jobs := make(chan string, threads)
-        var wg sync.WaitGroup
-        mu := sync.Mutex{}
-
-        for i := 0; i < threads; i++ {
-            wg.Add(1)
-            go func() {
-                defer wg.Done()
-                worker(ctx, deps, host, rootResp, dummyResponses, filteredPayloads, jobs, &mu)
-            }()
-        }
-        for _, p := range paths {
-            if p == "" {
-                continue
-            }
-            path := p
-            if !strings.HasPrefix(path, "/") {
-                path = "/" + path
-            }
-            if !strings.HasSuffix(path, "/") {
-                path = path + "/"
-            }
-            jobs <- path
-        }
-        close(jobs)
-        wg.Wait()
+    jobs := make(chan string, threads)
+    var wg sync.WaitGroup
+    mu := sync.Mutex{}
+    for i := 0; i < threads; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            worker(ctx, deps, t.BaseURL, base, dummyResponses, filteredPayloads, jobs, &mu)
+        }()
     }
-
+    // Normalize path for traversal attempts
+    path := t.Path
+    if path != "" && !strings.HasSuffix(path, "/") { path = path + "/" }
+    jobs <- path
+    close(jobs)
+    wg.Wait()
     return nil
 }
 
-func worker(ctx context.Context, deps engine.Deps, baseURL string, rootResp *httpx.Response, dummyResponses []*httpx.Response, dummyPayloads []string, jobs <-chan string, mu *sync.Mutex) {
+func worker(ctx context.Context, deps engine.Deps, baseURL string, baseResp *httpx.Response, dummyResponses []*httpx.Response, dummyPayloads []string, jobs <-chan string, mu *sync.Mutex) {
     for raw := range jobs {
         select {
         case <-ctx.Done():
@@ -123,7 +85,7 @@ func worker(ctx context.Context, deps engine.Deps, baseURL string, rootResp *htt
 
         var backResp *httpx.Response
         if back == "/" || strings.TrimSpace(back) == "" {
-            backResp = rootResp
+            backResp = baseResp
         } else {
             b, berr := deps.Client.Do(baseURL, back)
             if berr != nil {
@@ -202,50 +164,4 @@ func emitFinding(deps engine.Deps, baseURL, path, payload string, resp *httpx.Re
     mu.Unlock()
 }
 
-// loadTargets reads the wordlist and returns a map of base host URL -> list of paths.
-func loadTargets(deps engine.Deps) (map[string][]string, error) {
-    targets := make(map[string][]string)
-    file, err := os.Open(deps.Opts.Wordlist)
-    if err != nil {
-        return nil, err
-    }
-    defer file.Close()
-
-    if deps.Opts.URLsFile {
-        sc := bufio.NewScanner(file)
-        for sc.Scan() {
-            raw := strings.TrimSpace(sc.Text())
-            if raw == "" {
-                continue
-            }
-            u, err := url.Parse(raw)
-            if err != nil {
-                continue
-            }
-            host := u.Scheme + "://" + u.Host
-            targets[host] = append(targets[host], u.Path)
-        }
-        if err := sc.Err(); err != nil {
-            return nil, err
-        }
-        return targets, nil
-    }
-
-    // Single base host with paths from wordlist
-    baseURL, err := deps.Opts.BuildBaseURL()
-    if err != nil {
-        return nil, err
-    }
-    sc := bufio.NewScanner(file)
-    for sc.Scan() {
-        p := strings.TrimSpace(sc.Text())
-        if p == "" {
-            continue
-        }
-        targets[baseURL] = append(targets[baseURL], p)
-    }
-    if err := sc.Err(); err != nil {
-        return nil, err
-    }
-    return targets, nil
-}
+// Note: target iteration and baseline building happens in the engine for per-URL streaming.
