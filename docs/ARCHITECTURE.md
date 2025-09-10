@@ -1,0 +1,84 @@
+# Architecture Overview
+
+This document summarizes the current layered architecture of the scanner and how modules (checks) are executed per URL with a shared baseline response.
+
+## Layers
+- CLI (main.go)
+  - Parses flags, builds `config.Options`, constructs shared services, and starts the engine.
+- Config (`internal/config`)
+  - Holds `Options` and helpers such as `BuildBaseURL()`.
+- HTTP (`internal/httpx`)
+  - Thin wrapper over `net/http` that preserves raw paths via `URL.Opaque`, supports TLS/proxy/redirect policy.
+- Payloads (`internal/payload`)
+  - Provides traversal payload sources and helpers to build candidate paths.
+- Output (`internal/output`)
+  - Sinks for findings (Stdout, JSONL). `Finding` includes a `Module` field.
+- Engine (`internal/engine`)
+  - Orchestrates per-URL streaming, builds a single baseline per URL, and runs enabled modules.
+- Modules (`internal/modules/<name>`)
+  - Self-contained checks implementing the `Module` interface. Examples: `sct` (secondary context traversal).
+
+## Engine and Module Contracts
+
+```go
+// Deps are shared services/modules receive from the engine
+type Deps struct {
+    Opts     *config.Options
+    Client   *httpx.Client
+    Payloads *payload.Source
+    Sink     output.Sink
+}
+
+// Target represents a single URL to scan
+type Target struct {
+    BaseURL string // e.g., https://example.com
+    Path    string // raw path, expected to start with "/"
+}
+
+// Module API: each module processes one Target using the provided base response
+type Module interface {
+    Name() string
+    Process(ctx context.Context, deps Deps, t Target, base *httpx.Response) error
+}
+```
+
+### Per‑URL Streaming with a Shared Baseline
+- The engine reads the target list in a streaming fashion (line by line) via `iterateTargets`.
+- For each `Target`, the engine:
+  1) Normalizes the path, 2) performs exactly one canonical base request using `httpx.Client.Do(baseURL, path)`, then 3) calls each enabled module’s `Process` with that base.
+- Modules reuse the same base response for comparisons and send their own payload requests as needed.
+- After all modules finish for the current target, the baseline is discarded and the engine proceeds to the next target. Memory usage stays low.
+
+## HTTP Client (`internal/httpx`)
+- Preserves raw traversal sequences by setting `Request.URL.Opaque`.
+- Configurable redirect policy (via options), timeouts, TLS validation (honors `NoTLSValidation`), and proxy.
+- Intended to evolve to support per-request options for modules that need different policies (e.g., redirect on/off).
+
+## Payloads (`internal/payload`)
+- `Source` provides ordered payloads (from stealth to aggressive) and `BuildTraversal(path)` to generate candidate URLs for checks like SCT.
+
+## Output (`internal/output`)
+- `Finding` is a structured record including `Module`, `Host`, `Path`, `Payload`, `Signals`, `Notes`, `Status`, `Server`, `ContentType`, and timestamp.
+- `JSONLSink` writes one JSON object per line per host. `StdoutSink` prints compact text.
+
+## SCT Module (`internal/modules/sct`)
+- Implements secondary context path traversal as a module.
+- `Process` behavior for a single `Target`:
+  1) Receives the engine-provided base response (baseline for comparisons).
+  2) Builds additional per-target baselines as needed: one-step-back, dummy, and nonexistent paths.
+  3) Generates traversal payload candidates using `payload.Source`.
+  4) Sends traversal requests and compares them against the baselines using simple heuristics (status/server/content-type differences).
+  5) Emits findings to the configured sink with `Module = "sct"`.
+
+## Extending with New Modules
+- Create a new module package under `internal/modules/<name>` that implements `Module`.
+- Reuse `Deps` (HTTP, Payloads, Output) and accept the per-URL base response from the engine.
+- Implement module-specific detection logic inside `Process`.
+- Register the module in `main.go` by adding it to the engine’s `Modules` slice.
+
+## Future Enhancements
+- Per-request HTTP options (redirects, header overrides) to isolate module behavior.
+- Optional in-memory request de-duplication per target to avoid repeated identical requests across modules.
+- Rate limiting / backoff as a shared engine service.
+- CLI `--modules` flag to select which modules to run.
+
