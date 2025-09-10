@@ -13,10 +13,12 @@ This document summarizes the current layered architecture of the scanner and how
   - Provides traversal payload sources and helpers to build candidate paths.
 - Output (`internal/output`)
   - Sinks for findings (Stdout, JSONL). `Finding` includes a `Module` field.
+- Detect Utilities (`internal/detect`)
+  - Small, generic helpers for detection heuristics (e.g., value difference checks). Module-specific logic stays inside modules.
 - Engine (`internal/engine`)
   - Orchestrates per-URL streaming, builds a single baseline per URL, and runs enabled modules.
 - Modules (`internal/modules/<name>`)
-  - Self-contained checks implementing the `Module` interface. Examples: `sct` (secondary context traversal).
+  - Self-contained checks implementing the `Module` interface. Example: `scpt` (Secondary Context Path Traversal).
 
 ## Engine and Module Contracts
 
@@ -55,30 +57,34 @@ type Module interface {
 - Intended to evolve to support per-request options for modules that need different policies (e.g., redirect on/off).
 
 ## Payloads (`internal/payload`)
-- `Source` provides ordered payloads (from stealth to aggressive) and `BuildTraversal(path)` to generate candidate URLs for checks like SCT.
+- `Source` provides ordered payloads (from stealth to aggressive) and `BuildTraversal(path)` to generate candidate URLs for checks like SCPT.
 
 ## Output (`internal/output`)
 - `Finding` is a structured record including `Module`, `Host`, `Path`, `Payload`, `Signals`, `Notes`, `Status`, `Server`, `ContentType`, and timestamp.
 - `JSONLSink` writes one JSON object per line per host. `StdoutSink` prints compact text.
 
-## SCT Module (`internal/modules/sct`)
-- Implements secondary context path traversal as a module.
+## SCPT Module (`internal/modules/scpt`)
+- Implements Secondary Context Path Traversal as a module.
 - `Process` behavior for a single `Target`:
   1) Receives the engine-provided base response (baseline for comparisons).
   2) Builds additional per-target baselines as needed: one-step-back, dummy, and nonexistent paths.
   3) Generates traversal payload candidates using `payload.Source`.
   4) Sends traversal requests and compares them against the baselines using simple heuristics (status/server/content-type differences).
-  5) Emits findings to the configured sink with `Module = "sct"`.
+  5) Emits findings to the configured sink with `Module = "scpt"`.
+
+## CLI and Modules
+- The SCPT module can be toggled with the `--scpt` flag (boolean). Defaults to enabled.
+- Future modules can add similar flags and be appended to the engine’s `Modules` slice in `main.go`.
 
 ## Extending with New Modules
 - Create a new module package under `internal/modules/<name>` that implements `Module`.
 - Reuse `Deps` (HTTP, Payloads, Output) and accept the per-URL base response from the engine.
 - Implement module-specific detection logic inside `Process`.
-- Register the module in `main.go` by adding it to the engine’s `Modules` slice.
+- Register the module in `main.go` by adding it (and its flag) to the engine’s `Modules` slice.
 
 ## Future Enhancements
 - Per-request HTTP options (redirects, header overrides) to isolate module behavior.
 - Optional in-memory request de-duplication per target to avoid repeated identical requests across modules.
 - Rate limiting / backoff as a shared engine service.
-- CLI `--modules` flag to select which modules to run.
+- CLI `--modules` list flag to select multiple modules by name.
 
