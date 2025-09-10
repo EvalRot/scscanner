@@ -10,11 +10,11 @@ import (
 
     // Internal layered packages
     "pohek/internal/config"
-    "pohek/internal/detect"
+    "pohek/internal/engine"
     "pohek/internal/httpx"
+    "pohek/internal/modules/sct"
     "pohek/internal/output"
     "pohek/internal/payload"
-    "pohek/internal/scanner"
 )
 
 func main() {
@@ -84,13 +84,15 @@ func main() {
                 os.Exit(1)
             }
             pay := payload.NewDefault()
-            det := detect.BasicDetector{}
             sink := output.JSONLSink{OutputDir: opt.OutputDir}
-            runner := &scanner.Runner{Opts: opt, Client: client, Payloads: pay, Detector: det, Sink: sink}
+
+            // Prepare engine with current SCT module; future modules can be appended here
+            deps := engine.Deps{Opts: opt, Client: client, Payloads: pay, Sink: sink}
+            eng := &engine.Engine{Deps: deps, Modules: []engine.Module{ sct.Module{} }}
 
             // Run with a cancellable context to enable future graceful shutdowns
             ctx := context.Background()
-            if err := runner.Run(ctx); err != nil {
+            if err := eng.Run(ctx); err != nil {
                 fmt.Printf("[!] run error: %v\n", err)
                 os.Exit(1)
             }

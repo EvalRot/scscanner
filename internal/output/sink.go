@@ -10,6 +10,7 @@ import (
 
 // Finding is a structured record of a single detection event.
 type Finding struct {
+    Module      string            `json:"module"`
     Timestamp   time.Time         `json:"ts"`
     Host        string            `json:"host"`
     Path        string            `json:"path"`
@@ -71,4 +72,3 @@ func safeFilename(host string) string {
     }
     return string(b)
 }
-
