@@ -1,11 +1,20 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"time"
-	"pohek/scscanner"
-	"github.com/thatisuday/commando"
+    "context"
+    "fmt"
+    "os"
+    "time"
+
+    "github.com/thatisuday/commando"
+
+    // Internal layered packages
+    "pohek/internal/config"
+    "pohek/internal/detect"
+    "pohek/internal/httpx"
+    "pohek/internal/output"
+    "pohek/internal/payload"
+    "pohek/internal/scanner"
 )
 
 func main() {
@@ -30,90 +39,62 @@ func main() {
 		AddFlag("output", "path to output directory", commando.String, "no.no").
 		AddFlag("proxy", "proxy server from env variable", commando.Bool, nil).
 		AddFlag("proxy-url", "proxy server from env variable", commando.String, "proxy").
-		SetAction(func(args map[string]commando.ArgValue, flags map[string]commando.FlagValue) {
-			basehost := args["basehost"].Value
-			wordlist := args["wordlist"].Value
-			port, _ := flags["port"].GetInt()
-			ssl, _ := flags["ssl"].GetBool()
-			followRedirects, _ := flags["followredirects"].GetBool()
-			timeout, _ := flags["timeout"].GetInt()
-			userAgent, _ := flags["useragent"].GetString()
-			threads, _ := flags["threads"].GetInt()
-			output, _ := flags["output"].GetString()
-			retries, _ := flags["retry"].GetInt()
-			insecure, _ := flags["insecure"].GetBool()
-			method, _ := flags["method"].GetString()
-			urlfile, _ := flags["urlfile"].GetBool()
-			proxy, _ := flags["proxy"].GetBool()
-			proxyurl, _ := flags["proxy-url"].GetString()
-			var sc scscanner.SCScanner
-			config := scscanner.NewOptions()
-			config.Hostname = basehost
-			config.Wordlist = wordlist
-			config.Port = port
-			config.Ssl = ssl
-			config.FollowRedirect = followRedirects
-			config.Timeout = time.Duration(timeout) * time.Second
-			config.UserAgent = userAgent
-			config.Threads = threads
-			config.Retry = retries
-			config.NoTLSValidation = insecure
-			config.Method = method
-			config.URLsFile = urlfile
-			config.Proxy = proxy
-			config.ProxyUrl = proxyurl
-			config.OutputDir = output
-			sc.Opts = config
-			sc.Results = make([]string, 0)
-			//sc.Printer = &core.Printer{config}
-			//sc.Printer.PrintBanner()
-			//sc.Printer.PrintConfig()
-			if config.URLsFile {
-				err := sc.ReadFileLines()
-				if err != nil {
-					fmt.Printf("[!] Error opening wordlist file\n")
-					os.Exit(0)
-				}
-				fl, erro := os.Create(output)
-				if erro != nil {
-					fmt.Printf("[!] Unable to create output directory %s\n", output)
-					os.Exit(0)
-				}
-				fl.Close()
-				os.Remove(output)
-				sc.Run()
-				if output != "no.no" {
-					err := sc.WriteResults()
-					if err != nil {
-						fmt.Printf("\n[!] unable to save results to directory to %s\n", output)
-					} else {
-						fmt.Printf("\n[+] results saved to directory %s\n", output)
-					}
-				}
-			} else {
-				err := sc.ReadFileLines()
-				if err != nil {
-					fmt.Printf("[!] Error opening wordlist file\n")
-					os.Exit(0)
-				}
-				fl, erro := os.Create(output)
-				if erro != nil {
-					fmt.Printf("[!] Unable to create directory %s\n", output)
-					os.Exit(0)
-				}
-				fl.Close()
-				os.Remove(output)
-				sc.Run()
-				if output != "no.no" {
-					err := sc.WriteResults()
-					if err != nil {
-						fmt.Printf("\n[!] unable to save results to directory to %s\n", output)
-					} else {
-						fmt.Printf("\n[+] results saved to directory %s\n", output)
-					}
-				}
-			}
-		})
+        SetAction(func(args map[string]commando.ArgValue, flags map[string]commando.FlagValue) {
+            // Gather CLI values
+            basehost := args["basehost"].Value
+            wordlist := args["wordlist"].Value
+            port, _ := flags["port"].GetInt()
+            ssl, _ := flags["ssl"].GetBool()
+            followRedirects, _ := flags["followredirects"].GetBool()
+            timeout, _ := flags["timeout"].GetInt()
+            userAgent, _ := flags["useragent"].GetString()
+            threads, _ := flags["threads"].GetInt()
+            outdir, _ := flags["output"].GetString()
+            retries, _ := flags["retry"].GetInt()
+            insecure, _ := flags["insecure"].GetBool()
+            method, _ := flags["method"].GetString()
+            urlfile, _ := flags["urlfile"].GetBool()
+            proxy, _ := flags["proxy"].GetBool()
+            proxyurl, _ := flags["proxy-url"].GetString()
+
+            // Build options
+            opt := &config.Options{
+                Hostname:        basehost,
+                Wordlist:        wordlist,
+                Port:            port,
+                Ssl:             ssl,
+                FollowRedirect:  followRedirects,
+                Timeout:         time.Duration(timeout) * time.Second,
+                UserAgent:       userAgent,
+                Threads:         threads,
+                Retry:           retries,
+                NoTLSValidation: insecure,
+                Method:          method,
+                URLsFile:        urlfile,
+                Proxy:           proxy,
+                ProxyUrl:        proxyurl,
+                OutputDir:       outdir,
+                Headers:         map[string]string{},
+            }
+
+            // Build dependencies for the layered scanner
+            client, err := httpx.New(opt)
+            if err != nil {
+                fmt.Printf("[!] cannot init http client: %v\n", err)
+                os.Exit(1)
+            }
+            pay := payload.NewDefault()
+            det := detect.BasicDetector{}
+            sink := output.JSONLSink{OutputDir: opt.OutputDir}
+            runner := &scanner.Runner{Opts: opt, Client: client, Payloads: pay, Detector: det, Sink: sink}
+
+            // Run with a cancellable context to enable future graceful shutdowns
+            ctx := context.Background()
+            if err := runner.Run(ctx); err != nil {
+                fmt.Printf("[!] run error: %v\n", err)
+                os.Exit(1)
+            }
+        })
 	// commando.
 	// 	Register("fuzzy").
 	// 	SetDescription("Get Levenshtein distance ratio by comparing Vhosts response body with target. Vhosts can be filtered by specified ratio (if Vhost is similar to target and Levenshtein distance ratio is higher than specified, Vhost will be filtered (not shown)").
