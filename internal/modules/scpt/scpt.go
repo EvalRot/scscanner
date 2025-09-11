@@ -6,7 +6,6 @@ import (
     "math/rand"
     "net/url"
     "strings"
-    "sync"
     "time"
 
     "pohek/helper"
@@ -101,7 +100,6 @@ func (Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, ba
     }
 
     // Sequential per-payload scanning (engine handles target-level concurrency)
-    var mu sync.Mutex
     for _, p := range payloads {
         travPath := path + p
         select {
@@ -132,7 +130,7 @@ func (Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, ba
             if serverDiff { notes = append(notes, "Server header differs (vs parent & non-existent)") }
             if contentTypeDiff { notes = append(notes, "Content-Type differs (vs parent & non-existent)") }
             if statusDiff || serverDiff || contentTypeDiff {
-                emitFinding(deps, t.BaseURL, path, p, resp, statusDiff, serverDiff, contentTypeDiff, notes, &mu)
+                emitFinding(deps, t.BaseURL, path, p, resp, statusDiff, serverDiff, contentTypeDiff, notes)
             }
             break
         }
@@ -140,7 +138,7 @@ func (Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, ba
     return nil
 }
 
-func emitFinding(deps engine.Deps, baseURL, path, payload string, resp *httpx.Response, statusDiff, serverDiff, contentTypeDiff bool, notes []string, mu *sync.Mutex) {
+func emitFinding(deps engine.Deps, baseURL, path, payload string, resp *httpx.Response, statusDiff, serverDiff, contentTypeDiff bool, notes []string) {
     f := &output.Finding{
         Module:      "scpt",
         Timestamp:   time.Now(),
@@ -154,9 +152,7 @@ func emitFinding(deps engine.Deps, baseURL, path, payload string, resp *httpx.Re
         Server:      resp.Server,
         ContentType: resp.ContentType,
     }
-    mu.Lock()
     _ = deps.Sink.Write(f)
-    mu.Unlock()
 }
 
 // Note: target iteration and baseline building happens in the engine for per-URL streaming.

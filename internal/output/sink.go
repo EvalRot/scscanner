@@ -6,6 +6,7 @@ import (
     "os"
     "path/filepath"
     "time"
+    "sync"
 )
 
 // Finding is a structured record of a single detection event.
@@ -26,6 +27,21 @@ type Finding struct {
 // Sink is a destination for findings (stdout, file, JSONL, etc.).
 type Sink interface {
     Write(*Finding) error
+}
+
+// SafeSink wraps another Sink and serializes concurrent Write calls.
+type SafeSink struct {
+    mu    sync.Mutex
+    Inner Sink
+}
+
+// NewSafe returns a thread-safe wrapper around the provided sink.
+func NewSafe(inner Sink) *SafeSink { return &SafeSink{Inner: inner} }
+
+func (s *SafeSink) Write(f *Finding) error {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    return s.Inner.Write(f)
 }
 
 // StdoutSink prints findings to stdout in a compact textual form.

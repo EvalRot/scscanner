@@ -85,7 +85,7 @@ func main() {
                 os.Exit(1)
             }
             pay := payload.NewDefault()
-            sink := output.JSONLSink{OutputDir: opt.OutputDir}
+            sink := output.NewSafe(output.JSONLSink{OutputDir: opt.OutputDir})
 
             // Prepare engine with modules controlled by CLI flags
             deps := engine.Deps{Opts: opt, Client: client, Payloads: pay, Sink: sink}
