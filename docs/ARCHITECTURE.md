@@ -10,13 +10,13 @@ This document summarizes the current layered architecture of the scanner and how
 - HTTP (`internal/httpx`)
   - Thin wrapper over `net/http` that preserves raw paths via `URL.Opaque`, supports TLS/proxy/redirect policy.
 - Payloads (`internal/payload`)
-  - Provides traversal payload sources and helpers to build candidate paths.
+  - Provides traversal payload sources and helpers to build candidate paths. Modules may supply their own payload source.
 - Output (`internal/output`)
   - Sinks for findings (Stdout, JSONL). `Finding` includes a `Module` field.
 - Detect Utilities (`internal/detect`)
   - Small, generic helpers for detection heuristics (e.g., value difference checks). Module-specific logic stays inside modules.
 - Engine (`internal/engine`)
-  - Orchestrates per-URL streaming, builds a single baseline per URL, and runs enabled modules.
+  - Orchestrates per-URL streaming, builds a canonical baseline per URL, supports optional per-module preprocessing, and runs enabled modules.
 - Modules (`internal/modules/<name>`)
   - Self-contained checks implementing the `Module` interface. Example: `scpt` (Secondary Context Path Traversal).
 
@@ -42,14 +42,25 @@ type Module interface {
     Name() string
     Process(ctx context.Context, deps Deps, t Target, base *httpx.Response) error
 }
+
+// Optional: modules can adjust the Target and/or provide a module-specific
+// baseline before Process is invoked.
+type Preprocessor interface {
+    Preprocess(ctx context.Context, deps Deps, t Target, base *httpx.Response) (Target, *httpx.Response, error)
+}
+
+// Optional: modules can provide their own payload source.
+type PayloadProvider interface {
+    Payloads() *payload.Source
+}
 ```
 
-### Per‑URL Streaming with a Shared Baseline
+### Per‑URL Streaming with Baselines
 - The engine reads the target list in a streaming fashion (line by line) via `iterateTargets`.
 - For each `Target`, the engine:
-  1) Normalizes the path, 2) performs exactly one canonical base request using `httpx.Client.Do(baseURL, path)`, then 3) calls each enabled module’s `Process` with that base.
-- Modules reuse the same base response for comparisons and send their own payload requests as needed.
-- After all modules finish for the current target, the baseline is discarded and the engine proceeds to the next target. Memory usage stays low.
+  1) Normalizes the path (preserves query from URL lists), 2) performs one canonical base request using `httpx.Client.Do(baseURL, path)`, 3) for each module, optionally runs `Preprocess` to adjust the Target and/or baseline, and 4) calls `Process`.
+- Modules typically reuse the engine baseline; modules that implement `Preprocess` may substitute a module-specific baseline.
+- After all modules finish for the current target, baselines are discarded and the engine proceeds to the next target.
 
 ## HTTP Client (`internal/httpx`)
 - Preserves raw traversal sequences by setting `Request.URL.Opaque`.
@@ -65,6 +76,7 @@ type Module interface {
 
 ## SCPT Module (`internal/modules/scpt`)
 - Implements Secondary Context Path Traversal as a module.
+- `Preprocess`: strips GET parameters from the path and rebuilds a baseline for the stripped path (SCPT only mutates the path segment).
 - `Process` behavior for a single `Target`:
   1) Receives the engine-provided base response (baseline for comparisons).
   2) Builds additional per-target baselines as needed: one-step-back, dummy, and nonexistent paths.
@@ -87,4 +99,3 @@ type Module interface {
 - Optional in-memory request de-duplication per target to avoid repeated identical requests across modules.
 - Rate limiting / backoff as a shared engine service.
 - CLI `--modules` list flag to select multiple modules by name.
-

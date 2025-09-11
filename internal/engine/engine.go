@@ -39,6 +39,24 @@ type Module interface {
     Process(ctx context.Context, deps Deps, t Target, base *httpx.Response) error
 }
 
+// Preprocessor is an optional interface a module can implement to adjust the
+// target (e.g., strip/add query params, normalize path) and optionally supply
+// a module-specific baseline response before processing.
+//
+// If implemented, the engine will call Preprocess once per module per target
+// before invoking Process. If the returned Target differs, the engine will
+// pass it to Process. If a non-nil Response is returned, it will be used as
+// the baseline for that module; otherwise, the engine-provided baseline is used.
+type Preprocessor interface {
+    Preprocess(ctx context.Context, deps Deps, t Target, base *httpx.Response) (Target, *httpx.Response, error)
+}
+
+// PayloadProvider is an optional interface a module can implement to supply
+// its own payload source. If not implemented, the engine-provided source is used.
+type PayloadProvider interface {
+    Payloads() *payload.Source
+}
+
 // Engine orchestrates execution of one or more modules.
 // It does not know about module internals; it only sequences them with shared dependencies.
 type Engine struct {
@@ -60,7 +78,26 @@ func (e *Engine) Run(ctx context.Context) error {
             return nil
         }
         for _, m := range e.Modules {
-            _ = m.Process(ctx, e.Deps, Target{BaseURL: t.BaseURL, Path: p}, base)
+            // Start with shared deps and allow per-module overrides
+            mdeps := e.Deps
+            if pv, ok := m.(PayloadProvider); ok {
+                if ps := pv.Payloads(); ps != nil {
+                    mdeps.Payloads = ps
+                }
+            }
+
+            mt := Target{BaseURL: t.BaseURL, Path: p}
+            mbase := base
+            if pp, ok := m.(Preprocessor); ok {
+                if nt, nb, perr := pp.Preprocess(ctx, mdeps, mt, base); perr == nil {
+                    // adopt returned target/baseline if provided
+                    mt = nt
+                    if nb != nil {
+                        mbase = nb
+                    }
+                }
+            }
+            _ = m.Process(ctx, mdeps, mt, mbase)
         }
         return nil
     })
@@ -82,7 +119,11 @@ func (e *Engine) iterateTargets(ctx context.Context, fn func(Target) error) erro
             u, err := url.Parse(raw)
             if err != nil || u.Scheme == "" || u.Host == "" { continue }
             base := u.Scheme + "://" + u.Host
-            if err := fn(Target{BaseURL: base, Path: u.Path}); err != nil { _ = err }
+            path := u.Path
+            if u.RawQuery != "" {
+                path = path + "?" + u.RawQuery
+            }
+            if err := fn(Target{BaseURL: base, Path: path}); err != nil { _ = err }
         }
         return sc.Err()
     }

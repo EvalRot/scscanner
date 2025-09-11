@@ -13,6 +13,7 @@ import (
     "pohek/internal/engine"
     "pohek/internal/httpx"
     "pohek/internal/output"
+    "pohek/internal/payload"
 )
 
 // Module implements secondary context path traversal scanning as a pluggable module.
@@ -20,6 +21,45 @@ import (
 type Module struct{}
 
 func (Module) Name() string { return "scpt" }
+
+// Payloads returns the SCPT-specific payload source. Keeping a dedicated
+// instance allows other modules to use their own lists independently.
+func (Module) Payloads() *payload.Source {
+    // For now, reuse the default list. This can be tuned for SCPT later
+    // without affecting other modules.
+    return payload.NewDefault()
+}
+
+// Preprocess removes GET parameters from the path, since SCPT only mutates
+// the URL path segment. It also rebuilds a baseline for the stripped path so
+// subsequent comparisons use the correct reference.
+func (Module) Preprocess(ctx context.Context, deps engine.Deps, t engine.Target, base *httpx.Response) (engine.Target, *httpx.Response, error) {
+    raw := t.Path
+    if raw == "" {
+        return t, base, nil
+    }
+    // Extract path only; ignore query and fragment
+    u, err := url.Parse(raw)
+    var cleaned string
+    if err == nil {
+        cleaned = u.Path
+    } else {
+        cleaned = raw
+        if i := strings.Index(cleaned, "?"); i >= 0 { cleaned = cleaned[:i] }
+        if j := strings.Index(cleaned, "#"); j >= 0 { cleaned = cleaned[:j] }
+    }
+    if cleaned == "" { cleaned = "/" }
+    if !strings.HasPrefix(cleaned, "/") { cleaned = "/" + cleaned }
+    if cleaned == raw {
+        return t, base, nil
+    }
+    nb, nerr := deps.Client.Do(t.BaseURL, cleaned)
+    if nerr != nil {
+        // fall back to original baseline on error
+        return engine.Target{BaseURL: t.BaseURL, Path: cleaned}, base, nil
+    }
+    return engine.Target{BaseURL: t.BaseURL, Path: cleaned}, nb, nil
+}
 
 // Run performs SCT scanning for targets derived from the provided options and wordlist.
 // It builds multiple baselines (root/parent/dummy/nonexistent) to reduce false positives
