@@ -14,11 +14,11 @@ func NewDefault() *Source {
         "..%2f",          // encoded ../ (stealthier)
         "../",            // raw ../
         "..%5c",          // encoded backslash
-        "..;\\/",          // semicolon trick variant (escaped slash to keep as one token)
+//       "..;\\/",          // semicolon trick variant (escaped slash to keep as one token)
         "%2e%2e%2f",      // %2e%2e%2f
         ".%2e/",          // dot + encoded dot
-        "..\\",           // raw backslash
-        "..%2f..%2f",     // two levels
+        "..\\"           // raw backslash
+//        "..%2f..%2f",     // two levels
     }}
 }
 

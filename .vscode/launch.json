@@ -1,0 +1,25 @@
+{
+"version": "0.2.0",
+"configurations": [
+{
+"name": "Debug scscanner (URLs file)",
+"type": "go",
+"request": "launch",
+"mode": "debug",
+"program": "${workspaceFolder}",
+"cwd": "${workspaceFolder}",
+"args": [
+"placeholder",
+"urls.txt",
+"--urlfile",
+"--threads", "5",
+"--timeout", "5",
+"--output", "outdir",
+"--scpt"
+],
+"env": {
+"GODEBUG": "http2client=0"
+}
+}
+]
+}

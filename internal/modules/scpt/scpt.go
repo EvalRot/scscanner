@@ -70,21 +70,9 @@ func (Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, ba
     threads := deps.Opts.Threads
     if threads <= 0 { threads = 1 }
 
-    // Prepare dummy responses for each payload using a never-existing marker
-    dummyMarker := "/gachimuchicheburek/"
-    dummyPayloads := deps.Payloads.BuildTraversal(dummyMarker)
-    dummyResponses := make([]*httpx.Response, 0, len(dummyPayloads))
-    filteredPayloads := make([]string, 0, len(dummyPayloads))
-    for i, p := range dummyPayloads {
-        dr, derr := deps.Client.Do(t.BaseURL, p)
-        if derr != nil { continue }
-        // Skip payloads that the app consistently blocks with 403 while base is allowed
-        if dr.StatusCode != 403 || base.StatusCode == 403 {
-            dummyResponses = append(dummyResponses, dr)
-            filteredPayloads = append(filteredPayloads, deps.Payloads.Items()[i])
-        }
-    }
-    if len(dummyResponses) == 0 { return nil }
+    // Pull the module-specific payload list
+    payloads := deps.Payloads.Items()
+    if len(payloads) == 0 { return nil }
 
     jobs := make(chan string, threads)
     var wg sync.WaitGroup
@@ -93,7 +81,7 @@ func (Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, ba
         wg.Add(1)
         go func() {
             defer wg.Done()
-            worker(ctx, deps, t.BaseURL, base, dummyResponses, filteredPayloads, jobs, &mu)
+            worker(ctx, deps, t.BaseURL, base, payloads, jobs, &mu)
         }()
     }
     // Normalize path for traversal attempts
@@ -105,7 +93,7 @@ func (Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, ba
     return nil
 }
 
-func worker(ctx context.Context, deps engine.Deps, baseURL string, baseResp *httpx.Response, dummyResponses []*httpx.Response, dummyPayloads []string, jobs <-chan string, mu *sync.Mutex) {
+func worker(ctx context.Context, deps engine.Deps, baseURL string, baseResp *httpx.Response, payloads []string, jobs <-chan string, mu *sync.Mutex) {
     for raw := range jobs {
         select {
         case <-ctx.Done():
@@ -115,8 +103,8 @@ func worker(ctx context.Context, deps engine.Deps, baseURL string, baseResp *htt
         u, _ := url.Parse(raw)
         path := u.Path
         back := helper.OneStepBackPath(path)
-        dummyBase := back + "gachimuchicheburek/"
-        nonexistent := path + "gachimuchicheburek/"
+        // Non-existent under parent context
+        nonexistent := back + "gachimuchicheburek"
 
         nonResp, err := deps.Client.Do(baseURL, nonexistent)
         if err != nil {
@@ -134,26 +122,13 @@ func worker(ctx context.Context, deps engine.Deps, baseURL string, baseResp *htt
             backResp = b
         }
 
-        // Build traversal paths for this path, reusing filtered dummy payloads
-        travPaths := make([]string, 0, len(dummyPayloads))
-        for _, pay := range dummyPayloads {
+        // Build traversal paths for this path
+        travPaths := make([]string, 0, len(payloads))
+        for _, pay := range payloads {
             travPaths = append(travPaths, path+pay)
         }
 
         for i := range travPaths {
-            // Per-payload dummy baseline if URLsFile mode
-            var dummyResp *httpx.Response
-            if deps.Opts.URLsFile {
-                pr := dummyBase + dummyPayloads[i]
-                dr, derr := deps.Client.Do(baseURL, pr)
-                if derr != nil {
-                    continue
-                }
-                dummyResp = dr
-            } else {
-                dummyResp = dummyResponses[i%len(dummyResponses)]
-            }
-
             retries := deps.Opts.Retry
             for attempt := 0; attempt <= retries; attempt++ {
                 resp, err := deps.Client.Do(baseURL, travPaths[i])
@@ -168,16 +143,16 @@ func worker(ctx context.Context, deps engine.Deps, baseURL string, baseResp *htt
                     break
                 }
 
-                // Module-specific detection logic
-                statusDiff := (resp.StatusCode != backResp.StatusCode) && (resp.StatusCode != dummyResp.StatusCode) && (resp.StatusCode != nonResp.StatusCode)
-                serverDiff := (resp.Server != backResp.Server) && (resp.Server != dummyResp.Server) && (resp.Server != nonResp.Server)
-                contentTypeDiff := (resp.ContentType != backResp.ContentType) && (resp.ContentType != dummyResp.ContentType) && (resp.ContentType != nonResp.ContentType)
+                // Detection logic: differ from parent and from parent's non-existent
+                statusDiff := (resp.StatusCode != backResp.StatusCode) && (resp.StatusCode != nonResp.StatusCode)
+                serverDiff := (resp.Server != backResp.Server) && (resp.Server != nonResp.Server)
+                contentTypeDiff := (resp.ContentType != backResp.ContentType) && (resp.ContentType != nonResp.ContentType)
                 notes := make([]string, 0, 3)
-                if statusDiff { notes = append(notes, "Status code differs") }
-                if serverDiff { notes = append(notes, "Server header differs") }
-                if contentTypeDiff { notes = append(notes, "Content-Type header differs") }
+                if statusDiff { notes = append(notes, "Status code differs (vs parent & non-existent)") }
+                if serverDiff { notes = append(notes, "Server header differs (vs parent & non-existent)") }
+                if contentTypeDiff { notes = append(notes, "Content-Type differs (vs parent & non-existent)") }
                 if statusDiff || serverDiff || contentTypeDiff {
-                    emitFinding(deps, baseURL, path, dummyPayloads[i%len(dummyPayloads)], resp, statusDiff, serverDiff, contentTypeDiff, notes, mu)
+                    emitFinding(deps, baseURL, path, payloads[i%len(payloads)], resp, statusDiff, serverDiff, contentTypeDiff, notes, mu)
                 }
                 break
             }

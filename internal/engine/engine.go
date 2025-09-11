@@ -1,16 +1,16 @@
 package engine
 
 import (
-    "bufio"
-    "context"
-    "net/url"
-    "os"
-    "strings"
+	"bufio"
+	"context"
+	"net/url"
+	"os"
+	"strings"
 
-    "pohek/internal/config"
-    "pohek/internal/httpx"
-    "pohek/internal/output"
-    "pohek/internal/payload"
+	"pohek/internal/config"
+	"pohek/internal/httpx"
+	"pohek/internal/output"
+	"pohek/internal/payload"
 )
 
 // Deps aggregates shared services and configuration to be provided to modules.
@@ -51,12 +51,6 @@ type Preprocessor interface {
     Preprocess(ctx context.Context, deps Deps, t Target, base *httpx.Response) (Target, *httpx.Response, error)
 }
 
-// PayloadProvider is an optional interface a module can implement to supply
-// its own payload source. If not implemented, the engine-provided source is used.
-type PayloadProvider interface {
-    Payloads() *payload.Source
-}
-
 // Engine orchestrates execution of one or more modules.
 // It does not know about module internals; it only sequences them with shared dependencies.
 type Engine struct {
@@ -78,18 +72,10 @@ func (e *Engine) Run(ctx context.Context) error {
             return nil
         }
         for _, m := range e.Modules {
-            // Start with shared deps and allow per-module overrides
-            mdeps := e.Deps
-            if pv, ok := m.(PayloadProvider); ok {
-                if ps := pv.Payloads(); ps != nil {
-                    mdeps.Payloads = ps
-                }
-            }
-
             mt := Target{BaseURL: t.BaseURL, Path: p}
             mbase := base
             if pp, ok := m.(Preprocessor); ok {
-                if nt, nb, perr := pp.Preprocess(ctx, mdeps, mt, base); perr == nil {
+                if nt, nb, perr := pp.Preprocess(ctx, e.Deps, mt, base); perr == nil {
                     // adopt returned target/baseline if provided
                     mt = nt
                     if nb != nil {
@@ -97,7 +83,7 @@ func (e *Engine) Run(ctx context.Context) error {
                     }
                 }
             }
-            _ = m.Process(ctx, mdeps, mt, mbase)
+            _ = m.Process(ctx, e.Deps, mt, mbase)
         }
         return nil
     })
