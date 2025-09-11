@@ -1,16 +1,17 @@
 package engine
 
 import (
-	"bufio"
-	"context"
-	"net/url"
-	"os"
-	"strings"
+    "bufio"
+    "context"
+    "net/url"
+    "os"
+    "strings"
+    "sync"
 
-	"pohek/internal/config"
-	"pohek/internal/httpx"
-	"pohek/internal/output"
-	"pohek/internal/payload"
+    "pohek/internal/config"
+    "pohek/internal/httpx"
+    "pohek/internal/output"
+    "pohek/internal/payload"
 )
 
 // Deps aggregates shared services and configuration to be provided to modules.
@@ -60,33 +61,49 @@ type Engine struct {
 
 // Run streams targets one-by-one and reuses a single base response per target across modules.
 func (e *Engine) Run(ctx context.Context) error {
-    return e.iterateTargets(ctx, func(t Target) error {
-        p := t.Path
-        if p != "" && !strings.HasPrefix(p, "/") {
-            p = "/" + p
-        }
-        // Build baseline once per target
-        base, err := e.Deps.Client.Do(t.BaseURL, p)
-        if err != nil {
-            // skip target on error
-            return nil
-        }
-        for _, m := range e.Modules {
-            mt := Target{BaseURL: t.BaseURL, Path: p}
-            mbase := base
-            if pp, ok := m.(Preprocessor); ok {
-                if nt, nb, perr := pp.Preprocess(ctx, e.Deps, mt, base); perr == nil {
-                    // adopt returned target/baseline if provided
-                    mt = nt
-                    if nb != nil {
-                        mbase = nb
+    threads := e.Deps.Opts.Threads
+    if threads <= 0 { threads = 1 }
+
+    jobs := make(chan Target, threads)
+    var wg sync.WaitGroup
+
+    worker := func() {
+        defer wg.Done()
+        for t := range jobs {
+            select { case <-ctx.Done(): return; default: }
+            p := t.Path
+            if p != "" && !strings.HasPrefix(p, "/") {
+                p = "/" + p
+            }
+            // Build baseline once per target
+            base, err := e.Deps.Client.Do(t.BaseURL, p)
+            if err != nil {
+                // skip target on error
+                continue
+            }
+            for _, m := range e.Modules {
+                mt := Target{BaseURL: t.BaseURL, Path: p}
+                mbase := base
+                if pp, ok := m.(Preprocessor); ok {
+                    if nt, nb, perr := pp.Preprocess(ctx, e.Deps, mt, base); perr == nil {
+                        // adopt returned target/baseline if provided
+                        mt = nt
+                        if nb != nil {
+                            mbase = nb
+                        }
                     }
                 }
+                _ = m.Process(ctx, e.Deps, mt, mbase)
             }
-            _ = m.Process(ctx, e.Deps, mt, mbase)
         }
-        return nil
-    })
+    }
+
+    for i := 0; i < threads; i++ { wg.Add(1); go worker() }
+
+    err := e.iterateTargets(ctx, func(t Target) error { jobs <- t; return nil })
+    close(jobs)
+    wg.Wait()
+    return err
 }
 
 // iterateTargets builds targets from the configured wordlist in a streaming manner

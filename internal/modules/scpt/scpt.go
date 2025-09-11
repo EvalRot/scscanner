@@ -67,97 +67,77 @@ func (Module) Preprocess(ctx context.Context, deps engine.Deps, t engine.Target,
 // Process runs SCT payloads for a single target, using the provided base response as baseline.
 func (Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, base *httpx.Response) error {
     fmt.Printf("[scpt] scanning %s%s\n", t.BaseURL, t.Path)
-    threads := deps.Opts.Threads
-    if threads <= 0 { threads = 1 }
 
     // Pull the module-specific payload list
     payloads := deps.Payloads.Items()
-    if len(payloads) == 0 { return nil }
-
-    jobs := make(chan string, threads)
-    var wg sync.WaitGroup
-    mu := sync.Mutex{}
-    for i := 0; i < threads; i++ {
-        wg.Add(1)
-        go func() {
-            defer wg.Done()
-            worker(ctx, deps, t.BaseURL, base, payloads, jobs, &mu)
-        }()
+    if len(payloads) == 0 {
+        return nil
     }
-    // Normalize path for traversal attempts
-    path := t.Path
-    if path != "" && !strings.HasSuffix(path, "/") { path = path + "/" }
-    jobs <- path
-    close(jobs)
-    wg.Wait()
-    return nil
-}
 
-func worker(ctx context.Context, deps engine.Deps, baseURL string, baseResp *httpx.Response, payloads []string, jobs <-chan string, mu *sync.Mutex) {
-    for raw := range jobs {
+    // Normalize current path and compute parent and baselines once per target
+    path := t.Path
+    if path != "" && !strings.HasSuffix(path, "/") {
+        path = path + "/"
+    }
+    back := helper.OneStepBackPath(path)
+
+    // Parent baseline
+    var backResp *httpx.Response
+    if back == "/" || strings.TrimSpace(back) == "" {
+        backResp = base
+    } else {
+        b, berr := deps.Client.Do(t.BaseURL, back)
+        if berr != nil {
+            return nil
+        }
+        backResp = b
+    }
+
+    // Non-existent under parent context
+    nonexistent := strings.TrimSuffix(back, "/") + "/gachimuchicheburek"
+    nonResp, err := deps.Client.Do(t.BaseURL, nonexistent)
+    if err != nil {
+        return nil
+    }
+
+    // Sequential per-payload scanning (engine handles target-level concurrency)
+    var mu sync.Mutex
+    for _, p := range payloads {
+        travPath := path + p
         select {
         case <-ctx.Done():
-            return
+            return ctx.Err()
         default:
         }
-        u, _ := url.Parse(raw)
-        path := u.Path
-        back := helper.OneStepBackPath(path)
-        // Non-existent under parent context
-        nonexistent := back + "gachimuchicheburek"
-
-        nonResp, err := deps.Client.Do(baseURL, nonexistent)
-        if err != nil {
-            continue
-        }
-
-        var backResp *httpx.Response
-        if back == "/" || strings.TrimSpace(back) == "" {
-            backResp = baseResp
-        } else {
-            b, berr := deps.Client.Do(baseURL, back)
-            if berr != nil {
-                continue
-            }
-            backResp = b
-        }
-
-        // Build traversal paths for this path
-        travPaths := make([]string, 0, len(payloads))
-        for _, pay := range payloads {
-            travPaths = append(travPaths, path+pay)
-        }
-
-        for i := range travPaths {
-            retries := deps.Opts.Retry
-            for attempt := 0; attempt <= retries; attempt++ {
-                resp, err := deps.Client.Do(baseURL, travPaths[i])
-                if err != nil {
-                    if attempt < retries {
-                        continue
-                    }
-                    // Backoff a little before moving on
-                    rand.Seed(time.Now().UnixNano())
-                    n := rand.Intn(4) + 2 // 2..5 sec
-                    time.Sleep(time.Duration(n) * time.Second)
-                    break
+        retries := deps.Opts.Retry
+        for attempt := 0; attempt <= retries; attempt++ {
+            resp, err := deps.Client.Do(t.BaseURL, travPath)
+            if err != nil {
+                if attempt < retries {
+                    continue
                 }
-
-                // Detection logic: differ from parent and from parent's non-existent
-                statusDiff := (resp.StatusCode != backResp.StatusCode) && (resp.StatusCode != nonResp.StatusCode)
-                serverDiff := (resp.Server != backResp.Server) && (resp.Server != nonResp.Server)
-                contentTypeDiff := (resp.ContentType != backResp.ContentType) && (resp.ContentType != nonResp.ContentType)
-                notes := make([]string, 0, 3)
-                if statusDiff { notes = append(notes, "Status code differs (vs parent & non-existent)") }
-                if serverDiff { notes = append(notes, "Server header differs (vs parent & non-existent)") }
-                if contentTypeDiff { notes = append(notes, "Content-Type differs (vs parent & non-existent)") }
-                if statusDiff || serverDiff || contentTypeDiff {
-                    emitFinding(deps, baseURL, path, payloads[i%len(payloads)], resp, statusDiff, serverDiff, contentTypeDiff, notes, mu)
-                }
+                // Backoff a little before moving on
+                rand.Seed(time.Now().UnixNano())
+                n := rand.Intn(4) + 2 // 2..5 sec
+                time.Sleep(time.Duration(n) * time.Second)
                 break
             }
+
+            // Detection logic: differ from parent and from parent's non-existent
+            statusDiff := (resp.StatusCode != backResp.StatusCode) && (resp.StatusCode != nonResp.StatusCode)
+            serverDiff := (resp.Server != backResp.Server) && (resp.Server != nonResp.Server)
+            contentTypeDiff := (resp.ContentType != backResp.ContentType) && (resp.ContentType != nonResp.ContentType)
+            notes := make([]string, 0, 3)
+            if statusDiff { notes = append(notes, "Status code differs (vs parent & non-existent)") }
+            if serverDiff { notes = append(notes, "Server header differs (vs parent & non-existent)") }
+            if contentTypeDiff { notes = append(notes, "Content-Type differs (vs parent & non-existent)") }
+            if statusDiff || serverDiff || contentTypeDiff {
+                emitFinding(deps, t.BaseURL, path, p, resp, statusDiff, serverDiff, contentTypeDiff, notes, &mu)
+            }
+            break
         }
     }
+    return nil
 }
 
 func emitFinding(deps engine.Deps, baseURL, path, payload string, resp *httpx.Response, statusDiff, serverDiff, contentTypeDiff bool, notes []string, mu *sync.Mutex) {
