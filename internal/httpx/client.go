@@ -38,14 +38,27 @@ func New(opt *config.Options) (*Client, error) {
         return nil, fmt.Errorf("options is nil")
     }
 
-    proxyFunc := http.ProxyFromEnvironment
-    if opt.Proxy {
-        if opt.ProxyUrl != "" {
-            pu, err := url.Parse(opt.ProxyUrl)
-            if err == nil {
-                proxyFunc = http.ProxyURL(pu)
+    // Configure proxy selection
+    // Priority:
+    // 1) Explicit ProxyUrl if provided and valid
+    // 2) Environment proxies if --proxy is set
+    // 3) No proxy otherwise
+    var proxyFunc func(*http.Request) (*url.URL, error)
+    if opt.ProxyUrl != "" {
+        if pu, err := url.Parse(opt.ProxyUrl); err == nil && pu.Scheme != "" && pu.Host != "" {
+            proxyFunc = http.ProxyURL(pu)
+        } else {
+            // Invalid proxy URL provided; fall back based on --proxy flag
+            if opt.Proxy {
+                proxyFunc = http.ProxyFromEnvironment
+            } else {
+                proxyFunc = nil
             }
         }
+    } else if opt.Proxy {
+        proxyFunc = http.ProxyFromEnvironment
+    } else {
+        proxyFunc = nil
     }
 
     // Configure redirect policy
@@ -132,4 +145,3 @@ func (c *Client) Do(baseURL string, rawPath string) (*Response, error) {
     }
     return out, nil
 }
-

@@ -6,7 +6,7 @@ import (
     "os"
     "time"
 
-    "github.com/thatisuday/commando"
+    "github.com/urfave/cli/v2"
 
     // Internal layered packages
     "pohek/internal/config"
@@ -18,96 +18,82 @@ import (
 )
 
 func main() {
-	commando.
-		SetExecutableName("SCScanner").
-		SetVersion("1.0.0").
-		SetDescription("secondary context path traversal scanner")
-	commando.
-		Register(nil).
-		AddArgument("basehost", "target domain/IP", "").
-		AddArgument("wordlist", "path to wordlist", "").
-		AddFlag("port, p", "target port", commando.Int, 443).
-		AddFlag("ssl", "use ssl", commando.Bool, false).
-		AddFlag("urlfile", "file with URLs to test", commando.Bool, false).
-		AddFlag("followredirects", "follow redirects", commando.Bool, false).
-		AddFlag("timeout", "request timeout", commando.Int, 5).
-		AddFlag("method", "HTTP method", commando.String, "GET").
-		AddFlag("insecure", "Ignore TLS alerts", commando.Bool, true).
-		AddFlag("useragent", "set custom useragent", commando.String, "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83 Safari/537.36").
-		AddFlag("threads, t", "number of concurrent threads", commando.Int, 15).
-		AddFlag("retry", "max retries", commando.Int, 1).
-		AddFlag("output", "path to output directory", commando.String, "no.no").
-		AddFlag("proxy", "proxy server from env variable", commando.Bool, nil).
-		AddFlag("proxy-url", "proxy server from env variable", commando.String, "proxy").
-		AddFlag("scpt", "enable Secondary Context Path Traversal module", commando.Bool, true).
-        SetAction(func(args map[string]commando.ArgValue, flags map[string]commando.FlagValue) {
-            // Gather CLI values
-            basehost := args["basehost"].Value
-            wordlist := args["wordlist"].Value
-            port, _ := flags["port"].GetInt()
-            ssl, _ := flags["ssl"].GetBool()
-            followRedirects, _ := flags["followredirects"].GetBool()
-            timeout, _ := flags["timeout"].GetInt()
-            userAgent, _ := flags["useragent"].GetString()
-            threads, _ := flags["threads"].GetInt()
-            outdir, _ := flags["output"].GetString()
-            retries, _ := flags["retry"].GetInt()
-            insecure, _ := flags["insecure"].GetBool()
-            method, _ := flags["method"].GetString()
-            urlfile, _ := flags["urlfile"].GetBool()
-            proxy, _ := flags["proxy"].GetBool()
-            proxyurl, _ := flags["proxy-url"].GetString()
+    app := &cli.App{
+        Name:    "SCScanner",
+        Usage:   "secondary context path traversal scanner",
+        Version: "1.0.0",
+        Flags: []cli.Flag{
+            &cli.StringFlag{Name: "basehost", Usage: "target domain/IP (ignored with --urlfile)", Required: false},
+            &cli.StringFlag{Name: "wordlist", Usage: "path to wordlist or URLs file", Required: true},
+            &cli.IntFlag{Name: "port", Aliases: []string{"p"}, Value: 443, Usage: "target port"},
+            &cli.BoolFlag{Name: "ssl", Value: false, Usage: "use ssl"},
+            &cli.BoolFlag{Name: "urlfile", Value: false, Usage: "treat wordlist as a file with absolute URLs"},
+            &cli.BoolFlag{Name: "followredirects", Value: false, Usage: "follow redirects"},
+            &cli.IntFlag{Name: "timeout", Value: 5, Usage: "request timeout (seconds)"},
+            &cli.StringFlag{Name: "method", Value: "GET", Usage: "HTTP method"},
+            &cli.BoolFlag{Name: "insecure", Value: true, Usage: "ignore TLS alerts"},
+            &cli.StringFlag{Name: "useragent", Value: "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83 Safari/537.36", Usage: "custom user-agent"},
+            &cli.IntFlag{Name: "threads", Aliases: []string{"t"}, Value: 15, Usage: "number of concurrent threads (targets)"},
+            &cli.IntFlag{Name: "retry", Value: 1, Usage: "max retries per request"},
+            &cli.StringFlag{Name: "output", Value: "no.no", Usage: "path to output directory (JSONL) or no.no for stdout"},
+            &cli.BoolFlag{Name: "proxy", Value: false, Usage: "use proxy settings from environment (HTTP_PROXY/HTTPS_PROXY)"},
+            &cli.StringFlag{Name: "proxy-url", Value: "", Usage: "explicit proxy URL (e.g., http://127.0.0.1:8080)"},
+            &cli.BoolFlag{Name: "scpt", Value: true, Usage: "enable Secondary Context Path Traversal module"},
+        },
+        Action: func(c *cli.Context) error {
+            basehost := c.String("basehost")
+            wordlist := c.String("wordlist")
+            if wordlist == "" {
+                return fmt.Errorf("wordlist is required")
+            }
 
-            // Build options
             opt := &config.Options{
                 Hostname:        basehost,
                 Wordlist:        wordlist,
-                Port:            port,
-                Ssl:             ssl,
-                FollowRedirect:  followRedirects,
-                Timeout:         time.Duration(timeout) * time.Second,
-                UserAgent:       userAgent,
-                Threads:         threads,
-                Retry:           retries,
-                NoTLSValidation: insecure,
-                Method:          method,
-                URLsFile:        urlfile,
-                Proxy:           proxy,
-                ProxyUrl:        proxyurl,
-                OutputDir:       outdir,
+                Port:            c.Int("port"),
+                Ssl:             c.Bool("ssl"),
+                FollowRedirect:  c.Bool("followredirects"),
+                Timeout:         time.Duration(c.Int("timeout")) * time.Second,
+                UserAgent:       c.String("useragent"),
+                Threads:         c.Int("threads"),
+                Retry:           c.Int("retry"),
+                NoTLSValidation: c.Bool("insecure"),
+                Method:          c.String("method"),
+                URLsFile:        c.Bool("urlfile"),
+                Proxy:           c.Bool("proxy"),
+                ProxyUrl:        c.String("proxy-url"),
+                OutputDir:       c.String("output"),
                 Headers:         map[string]string{},
             }
 
-            // Build dependencies for the layered scanner
             client, err := httpx.New(opt)
             if err != nil {
-                fmt.Printf("[!] cannot init http client: %v\n", err)
-                os.Exit(1)
+                return fmt.Errorf("cannot init http client: %w", err)
             }
+
             pay := payload.NewDefault()
             sink := output.NewSafe(output.JSONLSink{OutputDir: opt.OutputDir})
-
-            // Prepare engine with modules controlled by CLI flags
             deps := engine.Deps{Opts: opt, Client: client, Payloads: pay, Sink: sink}
+
             modules := []engine.Module{}
-            scptEnabled, _ := flags["scpt"].GetBool()
-            if scptEnabled {
+            if c.Bool("scpt") {
                 modules = append(modules, scpt.Module{})
             }
             if len(modules) == 0 {
-                fmt.Println("[!] no modules enabled; enable with --scpt")
-                os.Exit(1)
+                return fmt.Errorf("no modules enabled; enable with --scpt")
             }
+
             eng := &engine.Engine{Deps: deps, Modules: modules}
-
-
-            // Run with a cancellable context to enable future graceful shutdowns
             ctx := context.Background()
             if err := eng.Run(ctx); err != nil {
-                fmt.Printf("[!] run error: %v\n", err)
-                os.Exit(1)
+                return err
             }
-        })
-		
-	commando.Parse(nil)
+            return nil
+        },
+    }
+
+    if err := app.Run(os.Args); err != nil {
+        fmt.Fprintf(os.Stderr, "[!] %v\n", err)
+        os.Exit(1)
+    }
 }
