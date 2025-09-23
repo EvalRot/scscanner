@@ -20,6 +20,9 @@ func NewDefault() *Source {
     }}
 }
 
+// NewFrom creates a Source from a provided payload list. The list is used as-is.
+func NewFrom(items []string) *Source { return &Source{items: append([]string(nil), items...)} }
+
 // Items returns the payloads in their current order.
 func (s *Source) Items() []string { return s.items }
 

@@ -22,7 +22,6 @@ type Options struct {
     Retry           int
     Headers         map[string]string
     Cookies         string
-    URLsFile        bool
     Proxy           bool
     ProxyUrl        string
     OutputDir       string
@@ -47,4 +46,3 @@ func (o *Options) BuildBaseURL() (string, error) {
     u := url.URL{Scheme: scheme, Host: host}
     return u.String(), nil
 }
-

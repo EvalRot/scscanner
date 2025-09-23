@@ -114,30 +114,19 @@ func (e *Engine) iterateTargets(ctx context.Context, fn func(Target) error) erro
     defer wl.Close()
 
     sc := bufio.NewScanner(wl)
-    if e.Deps.Opts.URLsFile {
-        for sc.Scan() {
-            select { case <-ctx.Done(): return ctx.Err(); default: }
-            raw := strings.TrimSpace(sc.Text())
-            if raw == "" { continue }
-            u, err := url.Parse(raw)
-            if err != nil || u.Scheme == "" || u.Host == "" { continue }
-            base := u.Scheme + "://" + u.Host
-            path := u.Path
-            if u.RawQuery != "" {
-                path = path + "?" + u.RawQuery
-            }
-            if err := fn(Target{BaseURL: base, Path: path}); err != nil { _ = err }
-        }
-        return sc.Err()
-    }
-
-    base, err := e.Deps.Opts.BuildBaseURL()
-    if err != nil { return err }
+    // URLs-only mode: each line must be an absolute URL
     for sc.Scan() {
         select { case <-ctx.Done(): return ctx.Err(); default: }
-        p := strings.TrimSpace(sc.Text())
-        if p == "" { continue }
-        if err := fn(Target{BaseURL: base, Path: p}); err != nil { _ = err }
+        raw := strings.TrimSpace(sc.Text())
+        if raw == "" { continue }
+        u, err := url.Parse(raw)
+        if err != nil || u.Scheme == "" || u.Host == "" { continue }
+        base := u.Scheme + "://" + u.Host
+        path := u.Path
+        if u.RawQuery != "" {
+            path = path + "?" + u.RawQuery
+        }
+        if err := fn(Target{BaseURL: base, Path: path}); err != nil { _ = err }
     }
     return sc.Err()
 }

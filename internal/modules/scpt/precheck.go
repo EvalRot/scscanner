@@ -1,0 +1,178 @@
+package scpt
+
+import (
+    "bufio"
+    "context"
+    "crypto/rand"
+    "encoding/hex"
+    "fmt"
+    "net/url"
+    "os"
+    "strings"
+
+    "pohek/internal/engine"
+)
+
+// RunPrecheck filters out traversal payloads that consistently trigger 302
+// normalization redirects on the target host. It performs two phases:
+// 1) Host baseline: request /<random>/ + payload; drop payloads returning 302.
+// 2) Sample verify: on up to 5 random URLs from the input file, if a payload
+//    returns 302 for all samples, drop it.
+// Returns the filtered payload list (may be empty). Any errors are treated as
+// no-filter (return original list).
+func RunPrecheck(ctx context.Context, deps engine.Deps) []string {
+    orig := deps.Payloads.Items()
+    if len(orig) == 0 {
+        return nil
+    }
+    base, err := deps.Opts.BuildBaseURL()
+    if err != nil || base == "" {
+        return orig
+    }
+
+    fmt.Printf("[scpt-precheck] Running precheck module for %s with %d payloads\n", base, len(orig))
+
+    // Phase 1: random non-existent baseline
+    rnd := randPath()
+    fmt.Printf("[scpt-precheck] Checking %s/%s/ with traversal payloads\n", base, rnd)
+
+    // Separate payloads by behavior on the random non-existent path
+    var (
+        flagged  []string // 302 on /<rand>/ — need confirmation on real URLs
+        nonflag  []string // not 302 — still verify on samples to be safe
+    )
+    for _, p := range orig {
+        select { case <-ctx.Done(): return orig; default: }
+        path := "/" + rnd + "/" + p
+        resp, err := deps.Client.Do(base, path)
+        if err != nil {
+            // Keep conservative: treat as non-flagged so it stays for scanning
+            nonflag = append(nonflag, p)
+            continue
+        }
+        if resp.StatusCode == 302 {
+            fmt.Printf("[scpt-precheck] The payload %q returns 302, will check again with a URL from the file\n", p)
+            flagged = append(flagged, p)
+        } else {
+            nonflag = append(nonflag, p)
+        }
+    }
+
+    // Phase 2: sample verification on up to 3 URLs from input file
+    samples := sampleURLs(deps.Opts.Wordlist, 3)
+    if len(samples) == 0 {
+        // No samples; keep non-flagged, drop flagged (conservative filtering)
+        if len(flagged) > 0 {
+            fmt.Printf("[scpt-precheck] No sample URLs available; conservatively filtering %d flagged payload(s)\n", len(flagged))
+        }
+        return nonflag
+    }
+
+    // Confirm flagged ones across samples; keep only those not 302 everywhere
+    var (
+        confirmedDrop []string
+        recovered     []string
+    )
+    for _, p := range flagged {
+        select { case <-ctx.Done(): return append([]string{}, nonflag...) ; default: }
+        all302 := true
+        var confirmedURL string
+        for _, raw := range samples {
+            u, err := url.Parse(raw)
+            if err != nil || u.Scheme == "" || u.Host == "" { continue }
+            baseURL := u.Scheme + "://" + u.Host
+            // Preserve original escaping; append payload before query string.
+            pth := u.EscapedPath()
+            if pth == "" { pth = "/" }
+            if !strings.HasSuffix(pth, "/") { pth = pth + "/" }
+            rawPath := pth + p
+            if u.RawQuery != "" { rawPath = rawPath + "?" + u.RawQuery }
+            resp, err := deps.Client.Do(baseURL, rawPath)
+            if err != nil { all302 = false; break }
+            if resp.StatusCode != 302 { all302 = false; break }
+            if confirmedURL == "" { confirmedURL = baseURL + rawPath }
+        }
+        if all302 {
+            confirmedDrop = append(confirmedDrop, p)
+            if confirmedURL != "" {
+                fmt.Printf("[scpt-precheck] Rechecking payload %q with the URL %s. 302 Confirmed. The payload %q was filtered out\n", p, confirmedURL, p)
+            } else {
+                fmt.Printf("[scpt-precheck] Rechecking payload %q. 302 Confirmed across samples. The payload was filtered out\n", p)
+            }
+        } else {
+            recovered = append(recovered, p)
+        }
+    }
+
+    // Also verify non-flagged payloads; drop if they show 302 across all samples
+    final := make([]string, 0, len(nonflag)+len(recovered))
+    var extraDrop []string
+    for _, p := range nonflag {
+        select { case <-ctx.Done(): return append(final, recovered...) ; default: }
+        all302 := true
+        for _, raw := range samples {
+            u, err := url.Parse(raw)
+            if err != nil || u.Scheme == "" || u.Host == "" { continue }
+            baseURL := u.Scheme + "://" + u.Host
+            path := u.Path
+            if u.RawQuery != "" { path = path + "?" + u.RawQuery }
+            if path != "" && !strings.HasSuffix(path, "/") { path = path + "/" }
+            resp, err := deps.Client.Do(baseURL, path+p)
+            if err != nil { all302 = false; break }
+            if resp.StatusCode != 302 { all302 = false; break }
+        }
+        if all302 {
+            extraDrop = append(extraDrop, p)
+        } else {
+            final = append(final, p)
+        }
+    }
+
+    // Merge recovered flagged ones back
+    final = append(final, recovered...)
+
+    // Final summary
+    var summary []string
+    if len(confirmedDrop) > 0 { summary = append(summary, confirmedDrop...) }
+    if len(extraDrop) > 0 { summary = append(summary, extraDrop...) }
+    if len(summary) > 0 {
+        fmt.Printf("[scpt-precheck] Payloads filtered after confirmation: %s\n", strings.Join(summary, ", "))
+    } else {
+        fmt.Printf("[scpt-precheck] No payloads were filtered out during confirmation\n")
+    }
+
+    return final
+}
+
+func randPath() string {
+    var b [8]byte
+    _, _ = rand.Read(b[:])
+    return hex.EncodeToString(b[:])
+}
+
+// sampleURLs performs a simple reservoir sample of up to k lines from file.
+// It expects absolute URLs; filtering/validation happens at call site.
+func sampleURLs(filepath string, k int) []string {
+    f, err := os.Open(filepath)
+    if err != nil { return nil }
+    defer f.Close()
+    sc := bufio.NewScanner(f)
+    out := make([]string, 0, k)
+    n := 0
+    for sc.Scan() {
+        raw := strings.TrimSpace(sc.Text())
+        if raw == "" { continue }
+        n++
+        if len(out) < k {
+            out = append(out, raw)
+        } else {
+            // replace with prob k/n
+            // simple LCG via hash of line count not required; use modulo trick
+            if (n % 3) == 0 {
+                idx := n % k
+                out[idx] = raw
+            }
+        }
+    }
+    return out
+}

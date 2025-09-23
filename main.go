@@ -21,13 +21,11 @@ func main() {
     app := &cli.App{
         Name:    "SCScanner",
         Usage:   "secondary context path traversal scanner",
-        Version: "1.0.0",
+        Version: "1.1.0",
+        ArgsUsage: "<hostname> <url_file>",
         Flags: []cli.Flag{
-            &cli.StringFlag{Name: "basehost", Usage: "target domain/IP (ignored with --urlfile)", Required: false},
-            &cli.StringFlag{Name: "wordlist", Usage: "path to wordlist or URLs file", Required: true},
-            &cli.IntFlag{Name: "port", Aliases: []string{"p"}, Value: 443, Usage: "target port"},
-            &cli.BoolFlag{Name: "ssl", Value: false, Usage: "use ssl"},
-            &cli.BoolFlag{Name: "urlfile", Value: false, Usage: "treat wordlist as a file with absolute URLs"},
+            &cli.IntFlag{Name: "port", Aliases: []string{"p"}, Value: 443, Usage: "target port for precheck"},
+            &cli.BoolFlag{Name: "ssl", Value: true, Usage: "use ssl for precheck base URL"},
             &cli.BoolFlag{Name: "followredirects", Value: false, Usage: "follow redirects"},
             &cli.IntFlag{Name: "timeout", Value: 5, Usage: "request timeout (seconds)"},
             &cli.StringFlag{Name: "method", Value: "GET", Usage: "HTTP method"},
@@ -39,13 +37,14 @@ func main() {
             &cli.BoolFlag{Name: "proxy", Value: false, Usage: "use proxy settings from environment (HTTP_PROXY/HTTPS_PROXY)"},
             &cli.StringFlag{Name: "proxy-url", Value: "", Usage: "explicit proxy URL (e.g., http://127.0.0.1:8080)"},
             &cli.BoolFlag{Name: "scpt", Value: true, Usage: "enable Secondary Context Path Traversal module"},
+            &cli.BoolFlag{Name: "scpt-precheck", Value: false, Usage: "enable SCPT payload precheck to filter normalization-redirect payloads"},
         },
         Action: func(c *cli.Context) error {
-            basehost := c.String("basehost")
-            wordlist := c.String("wordlist")
-            if wordlist == "" {
-                return fmt.Errorf("wordlist is required")
+            if c.NArg() < 2 {
+                return fmt.Errorf("usage: scscanner <hostname> <url_file>")
             }
+            basehost := c.Args().Get(0)
+            wordlist := c.Args().Get(1)
 
             opt := &config.Options{
                 Hostname:        basehost,
@@ -59,7 +58,6 @@ func main() {
                 Retry:           c.Int("retry"),
                 NoTLSValidation: c.Bool("insecure"),
                 Method:          c.String("method"),
-                URLsFile:        c.Bool("urlfile"),
                 Proxy:           c.Bool("proxy"),
                 ProxyUrl:        c.String("proxy-url"),
                 OutputDir:       c.String("output"),
@@ -77,6 +75,13 @@ func main() {
 
             modules := []engine.Module{}
             if c.Bool("scpt") {
+                // Optional precheck to filter out payloads that trigger normalization redirects (302)
+                if c.Bool("scpt-precheck") {
+                    filtered := scpt.RunPrecheck(c.Context, deps)
+                    if len(filtered) > 0 {
+                        deps.Payloads = payload.NewFrom(filtered)
+                    }
+                }
                 modules = append(modules, scpt.Module{})
             }
             if len(modules) == 0 {

@@ -5,8 +5,9 @@ import (
     "fmt"
     "os"
     "path/filepath"
-    "time"
+    "strings"
     "sync"
+    "time"
 )
 
 // Finding is a structured record of a single detection event.
@@ -48,7 +49,16 @@ func (s *SafeSink) Write(f *Finding) error {
 type StdoutSink struct{}
 
 func (s StdoutSink) Write(f *Finding) error {
-    fmt.Printf("[+] %s %s payload=%q status=%d signals=%v\n", f.Host, f.Path, f.Payload, f.Status, f.Signals)
+    // Build a stable full URL that always includes scheme://host and the traversal payload.
+    // Using Request.URL with an opaque path can lose the host (prints as https:/...).
+    base := strings.TrimRight(f.Host, "/")
+    path := f.Path
+    if path == "" { path = "/" }
+    if !strings.HasPrefix(path, "/") { path = "/" + path }
+    sep := ""
+    if f.Payload != "" && !strings.HasSuffix(path, "/") { sep = "/" }
+    full := base + path + sep + f.Payload
+    fmt.Printf("[+] %s payload=%q status=%d signals=%v\n", full, f.Payload, f.Status, f.Signals)
     return nil
 }
 

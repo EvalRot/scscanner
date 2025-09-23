@@ -1,18 +1,18 @@
 package scpt
 
 import (
-    "context"
-    "fmt"
-    "math/rand"
-    "net/url"
-    "strings"
-    "time"
+	"context"
+	"fmt"
+	"math/rand"
+	"net/url"
+	"strings"
+	"time"
 
-    "pohek/helper"
-    "pohek/internal/engine"
-    "pohek/internal/httpx"
-    "pohek/internal/output"
-    "pohek/internal/payload"
+	"pohek/helper"
+	"pohek/internal/engine"
+	"pohek/internal/httpx"
+	"pohek/internal/output"
+	"pohek/internal/payload"
 )
 
 // Module implements secondary context path traversal scanning as a pluggable module.
@@ -65,8 +65,6 @@ func (Module) Preprocess(ctx context.Context, deps engine.Deps, t engine.Target,
 // and performs module-specific detection heuristics.
 // Process runs SCT payloads for a single target, using the provided base response as baseline.
 func (Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, base *httpx.Response) error {
-    fmt.Printf("[scpt] scanning %s%s\n", t.BaseURL, t.Path)
-
     // Pull the module-specific payload list
     payloads := deps.Payloads.Items()
     if len(payloads) == 0 {
@@ -75,6 +73,11 @@ func (Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, ba
 
     // Normalize current path and compute parent and baselines once per target
     path := t.Path
+    // If path is root, traversal above root is not applicable; skip.
+    if path == "/" || strings.TrimSpace(path) == "" {
+        fmt.Printf("[scpt] skipping root path for %s (no parent context)\n", t.BaseURL)
+        return nil
+    }
     if path != "" && !strings.HasSuffix(path, "/") {
         path = path + "/"
     }
@@ -93,7 +96,7 @@ func (Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, ba
     }
 
     // Non-existent under parent context
-    nonexistent := strings.TrimSuffix(back, "/") + "/gachimuchicheburek"
+    nonexistent := strings.TrimSuffix(path, "/") + "/gachimuchicheburek"
     nonResp, err := deps.Client.Do(t.BaseURL, nonexistent)
     if err != nil {
         return nil
