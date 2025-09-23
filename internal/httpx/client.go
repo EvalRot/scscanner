@@ -6,6 +6,9 @@ import (
     "io/ioutil"
     "net/http"
     "net/url"
+    "strconv"
+    "sync"
+    "sync/atomic"
     "time"
 
     "pohek/internal/config"
@@ -19,6 +22,7 @@ type Response struct {
     StatusCode  int
     Body        []byte
     RequestURL  string
+    RetryAfter  time.Duration
 }
 
 // Client wraps net/http.Client and request building logic (headers, cookies, method, redirects, TLS).
@@ -29,7 +33,12 @@ type Client struct {
     headers   map[string]string
     cookies   string
     method    string
-    delay     bool
+    // Adaptive global pacing between requests across all workers, in milliseconds.
+    delayMs   int64 // accessed atomically
+    // 429 tracking to escalate delay from 0 -> 500ms -> 1000ms
+    mu            sync.Mutex
+    delayPhase    int       // 0: none, 1: 500ms, 2: 1000ms
+    delaySince    time.Time // time when current delayPhase became active
 }
 
 // New creates a new HTTP client from config.Options.
@@ -101,12 +110,36 @@ func (c *Client) SetRedirects(follow bool) {
     c.hc.CheckRedirect = redirectFunc
 }
 
-// AddDelay enables small delays between requests (used by anti-ban strategies).
-func (c *Client) AddDelay() { c.delay = true }
+// setGlobalDelay safely updates the inter-request delay and marks when it became active.
+func (c *Client) setGlobalDelay(d time.Duration, activatedAt time.Time, phase int) {
+    atomic.StoreInt64(&c.delayMs, d.Milliseconds())
+    c.delayPhase = phase
+    c.delaySince = activatedAt
+}
+
+// maybeEscalateDelayOn429 escalates delay: none -> 500ms, then -> 1000ms.
+// The second escalation only triggers for requests sent after the first delay became active.
+func (c *Client) maybeEscalateDelayOn429(reqStarted time.Time) {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    switch c.delayPhase {
+    case 0:
+        c.setGlobalDelay(500*time.Millisecond, reqStarted, 1)
+    case 1:
+        if reqStarted.After(c.delaySince) {
+            c.setGlobalDelay(1000*time.Millisecond, reqStarted, 2)
+        }
+    }
+}
 
 // Do issues a request to baseURL with the provided raw path inserted as Request.URL.Opaque.
 // baseURL must be a valid absolute URL without a path (scheme://host[:port]).
 func (c *Client) Do(baseURL string, rawPath string) (*Response, error) {
+    // Apply current pacing before issuing the request to ensure delay affects subsequent traffic.
+    if dms := atomic.LoadInt64(&c.delayMs); dms > 0 {
+        time.Sleep(time.Duration(dms) * time.Millisecond)
+    }
+
     req, err := http.NewRequest(c.method, baseURL, nil)
     if err != nil {
         return nil, err
@@ -126,6 +159,8 @@ func (c *Client) Do(baseURL string, rawPath string) (*Response, error) {
         req.Header.Set(k, v)
     }
 
+    // Record when the request is sent to evaluate 429 escalation boundaries.
+    started := time.Now()
     resp, err := c.hc.Do(req)
     if err != nil {
         return nil, err
@@ -140,8 +175,17 @@ func (c *Client) Do(baseURL string, rawPath string) (*Response, error) {
         Body:        body,
         RequestURL:  resp.Request.URL.String(),
     }
-    if c.delay {
-        time.Sleep(1 * time.Second)
+    // Capture Retry-After if present
+    if ra := resp.Header.Get("Retry-After"); ra != "" {
+        if secs, err := strconv.Atoi(ra); err == nil && secs >= 0 {
+            out.RetryAfter = time.Duration(secs) * time.Second
+        } else if t, err := http.ParseTime(ra); err == nil {
+            if dur := time.Until(t); dur > 0 { out.RetryAfter = dur }
+        }
+    }
+    // Escalate global delay on 429 according to policy
+    if resp.StatusCode == http.StatusTooManyRequests { // 429
+        c.maybeEscalateDelayOn429(started)
     }
     return out, nil
 }

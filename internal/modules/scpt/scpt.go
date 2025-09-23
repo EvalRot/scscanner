@@ -1,12 +1,12 @@
 package scpt
 
 import (
-	"context"
-	"fmt"
-	"math/rand"
-	"net/url"
-	"strings"
-	"time"
+    "context"
+    "fmt"
+    "math/rand"
+    "net/url"
+    "strings"
+    "time"
 
 	"pohek/helper"
 	"pohek/internal/engine"
@@ -121,6 +121,26 @@ func (Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, ba
                 rand.Seed(time.Now().UnixNano())
                 n := rand.Intn(4) + 2 // 2..5 sec
                 time.Sleep(time.Duration(n) * time.Second)
+                break
+            }
+
+            // 429-aware backoff: honor Retry-After if present; else exponential with jitter.
+            if resp.StatusCode == 429 {
+                if attempt < retries {
+                    if resp.RetryAfter > 0 {
+                        time.Sleep(resp.RetryAfter)
+                    } else {
+                        // exponential backoff: base 1s << attempt, capped to 8s, plus jitter 0-300ms
+                        base := 1 << attempt
+                        if base > 8 { base = 8 }
+                        d := time.Duration(base) * time.Second
+                        rand.Seed(time.Now().UnixNano())
+                        d += time.Duration(rand.Intn(300)) * time.Millisecond
+                        time.Sleep(d)
+                    }
+                    continue
+                }
+                // No more retries; treat as non-detection and move on
                 break
             }
 

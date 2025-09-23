@@ -1,20 +1,20 @@
 package main
 
 import (
-    "context"
-    "fmt"
-    "os"
-    "time"
+	"context"
+	"fmt"
+	"os"
+	"time"
 
-    "github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v2"
 
-    // Internal layered packages
-    "pohek/internal/config"
-    "pohek/internal/engine"
-    "pohek/internal/httpx"
-    "pohek/internal/modules/scpt"
-    "pohek/internal/output"
-    "pohek/internal/payload"
+	// Internal layered packages
+	"pohek/internal/config"
+	"pohek/internal/engine"
+	"pohek/internal/httpx"
+	"pohek/internal/modules/scpt"
+	"pohek/internal/output"
+	"pohek/internal/payload"
 )
 
 func main() {
@@ -32,7 +32,7 @@ func main() {
             &cli.BoolFlag{Name: "insecure", Value: true, Usage: "ignore TLS alerts"},
             &cli.StringFlag{Name: "useragent", Value: "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83 Safari/537.36", Usage: "custom user-agent"},
             &cli.IntFlag{Name: "threads", Aliases: []string{"t"}, Value: 15, Usage: "number of concurrent threads (targets)"},
-            &cli.IntFlag{Name: "retry", Value: 1, Usage: "max retries per request"},
+            &cli.IntFlag{Name: "retry", Value: 2, Usage: "max retries per request"},
             &cli.StringFlag{Name: "output", Value: "no.no", Usage: "path to output directory (JSONL) or no.no for stdout"},
             &cli.BoolFlag{Name: "proxy", Value: false, Usage: "use proxy settings from environment (HTTP_PROXY/HTTPS_PROXY)"},
             &cli.StringFlag{Name: "proxy-url", Value: "", Usage: "explicit proxy URL (e.g., http://127.0.0.1:8080)"},
