@@ -3,12 +3,14 @@ package scpt
 import (
     "bufio"
     "context"
-    "crypto/rand"
+    crand "crypto/rand"
     "encoding/hex"
     "fmt"
+    mrand "math/rand"
     "net/url"
     "os"
     "strings"
+    "time"
 
     "pohek/internal/engine"
 )
@@ -188,32 +190,37 @@ func RunPrecheck(ctx context.Context, deps engine.Deps) []string {
 
 func randPath() string {
     var b [8]byte
-    _, _ = rand.Read(b[:])
+    _, _ = crand.Read(b[:])
     return hex.EncodeToString(b[:])
 }
 
-// sampleURLs performs a simple reservoir sample of up to k lines from file.
-// It expects absolute URLs; filtering/validation happens at call site.
+// sampleURLs performs a reservoir sampling (Algorithm R) of up to k URLs from file.
+// It only considers absolute URLs with a non-empty path different from "/".
 func sampleURLs(filepath string, k int) []string {
     f, err := os.Open(filepath)
     if err != nil { return nil }
     defer f.Close()
     sc := bufio.NewScanner(f)
     out := make([]string, 0, k)
-    n := 0
+    count := 0 // number of eligible URLs seen
+    mrand.Seed(time.Now().UnixNano())
     for sc.Scan() {
         raw := strings.TrimSpace(sc.Text())
         if raw == "" { continue }
-        n++
+        u, perr := url.Parse(raw)
+        if perr != nil || u.Scheme == "" || u.Host == "" { continue }
+        p := u.Path
+        if p == "" || p == "/" { continue }
+
+        count++
         if len(out) < k {
             out = append(out, raw)
-        } else {
-            // replace with prob k/n
-            // simple LCG via hash of line count not required; use modulo trick
-            if (n % 3) == 0 {
-                idx := n % k
-                out[idx] = raw
-            }
+            continue
+        }
+        // Reservoir sampling: pick index in [0, count), replace if < k
+        j := mrand.Intn(count)
+        if j < k {
+            out[j] = raw
         }
     }
     return out
