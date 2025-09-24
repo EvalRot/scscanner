@@ -37,7 +37,7 @@ func main() {
             &cli.BoolFlag{Name: "proxy", Value: false, Usage: "use proxy settings from environment (HTTP_PROXY/HTTPS_PROXY)"},
             &cli.StringFlag{Name: "proxy-url", Value: "", Usage: "explicit proxy URL (e.g., http://127.0.0.1:8080)"},
             &cli.BoolFlag{Name: "scpt", Value: true, Usage: "enable Secondary Context Path Traversal module"},
-            &cli.BoolFlag{Name: "scpt-precheck", Value: false, Usage: "enable SCPT payload precheck to filter normalization-redirect payloads"},
+            &cli.BoolFlag{Name: "scpt-precheck", Value: false, Usage: "enable SCPT payload precheck to filter payloads consistently returning 302 (redirect) or 403 (forbidden)"},
         },
         Action: func(c *cli.Context) error {
             if c.NArg() < 2 {
@@ -76,8 +76,14 @@ func main() {
             modules := []engine.Module{}
             if c.Bool("scpt") {
                 // Optional precheck to filter out payloads that trigger normalization redirects (302)
+                // or are blocked by WAF consistently (403)
                 if c.Bool("scpt-precheck") {
                     filtered := scpt.RunPrecheck(c.Context, deps)
+                    // If precheck removed all payloads or there were none, stop scanning gracefully
+                    if filtered == nil || len(filtered) == 0 {
+                        fmt.Printf("[scpt-precheck] All payloads were filtered or none available. Stopping scan.\n")
+                        return nil
+                    }
                     if len(filtered) > 0 {
                         deps.Payloads = payload.NewFrom(filtered)
                     }

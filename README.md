@@ -14,9 +14,9 @@ Key flags
 - `--followredirects`: follow HTTP redirects (default false)
 - `--insecure`: ignore TLS validation (default true)
 - `--output`: output directory for JSONL per host (use `no.no` for stdout)
-- `--proxy`, `--proxy-url`: proxy configuration
-- `--scpt`: enable SCPT module (default true)
-- `--scpt-precheck`: enable payload precheck to filter normalization redirects
+ - `--proxy`, `--proxy-url`: proxy configuration
+ - `--scpt`: enable SCPT module (default true)
+ - `--scpt-precheck`: enable payload precheck to filter normalization redirects (302) and consistent WAF blocks (403)
 
 Behavior changes
 - Removed path-list mode (hostname + directory wordlist). Only URL-file input is supported now.
@@ -26,6 +26,9 @@ SCPT payload precheck (`--scpt-precheck`)
 1) Host baseline: requests `/<random>/ + payload` on the base host. Payloads that return 302 are dropped.
 2) Sample verify: samples up to 3 URLs from the input file. If a payload returns 302 on all samples, it’s dropped.
 3) Scanning proceeds with the filtered payloads only.
+
+Note
+- If all payloads are filtered by precheck (302/403), the scan stops early with a message instead of proceeding with an empty set.
 
 Output
 - Stdout: one line per finding, prints full URL once, payload, status, and signals.

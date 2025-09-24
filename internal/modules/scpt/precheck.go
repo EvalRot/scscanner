@@ -14,10 +14,10 @@ import (
 )
 
 // RunPrecheck filters out traversal payloads that consistently trigger 302
-// normalization redirects on the target host. It performs two phases:
-// 1) Host baseline: request /<random>/ + payload; drop payloads returning 302.
+// normalization redirects or 403 WAF blocks on the target host. It performs two phases:
+// 1) Host baseline: request /<random>/ + payload; drop payloads returning 302 or 403.
 // 2) Sample verify: on up to 5 random URLs from the input file, if a payload
-//    returns 302 for all samples, drop it.
+//    returns 302 (redirect) or 403 (forbidden) for all samples, drop it.
 // Returns the filtered payload list (may be empty). Any errors are treated as
 // no-filter (return original list).
 func RunPrecheck(ctx context.Context, deps engine.Deps) []string {
@@ -38,8 +38,9 @@ func RunPrecheck(ctx context.Context, deps engine.Deps) []string {
 
     // Separate payloads by behavior on the random non-existent path
     var (
-        flagged  []string // 302 on /<rand>/ — need confirmation on real URLs
-        nonflag  []string // not 302 — still verify on samples to be safe
+        flagged302 []string // 302 on /<rand>/ – need confirmation on real URLs
+        flagged403 []string // 403 on /<rand>/ – need confirmation on real URLs
+        nonflag    []string // not 302/403 – still verify on samples to be safe
     )
     for _, p := range orig {
         select { case <-ctx.Done(): return orig; default: }
@@ -50,10 +51,14 @@ func RunPrecheck(ctx context.Context, deps engine.Deps) []string {
             nonflag = append(nonflag, p)
             continue
         }
-        if resp.StatusCode == 302 {
+        switch resp.StatusCode {
+        case 302:
             fmt.Printf("[scpt-precheck] The payload %q returns 302, will check again with a URL from the file\n", p)
-            flagged = append(flagged, p)
-        } else {
+            flagged302 = append(flagged302, p)
+        case 403:
+            fmt.Printf("[scpt-precheck] The payload %q returns 403, will check again with a URL from the file\n", p)
+            flagged403 = append(flagged403, p)
+        default:
             nonflag = append(nonflag, p)
         }
     }
@@ -62,18 +67,20 @@ func RunPrecheck(ctx context.Context, deps engine.Deps) []string {
     samples := sampleURLs(deps.Opts.Wordlist, 3)
     if len(samples) == 0 {
         // No samples; keep non-flagged, drop flagged (conservative filtering)
-        if len(flagged) > 0 {
-            fmt.Printf("[scpt-precheck] No sample URLs available; conservatively filtering %d flagged payload(s)\n", len(flagged))
+        dropped := len(flagged302) + len(flagged403)
+        if dropped > 0 {
+            fmt.Printf("[scpt-precheck] No sample URLs available; conservatively filtering %d flagged payload(s)\n", dropped)
         }
         return nonflag
     }
 
-    // Confirm flagged ones across samples; keep only those not 302 everywhere
+    // Confirm flagged ones across samples; keep only those not 302/403 everywhere
     var (
         confirmedDrop []string
         recovered     []string
     )
-    for _, p := range flagged {
+    // Confirm 302-flagged
+    for _, p := range flagged302 {
         select { case <-ctx.Done(): return append([]string{}, nonflag...) ; default: }
         all302 := true
         var confirmedURL string
@@ -104,12 +111,45 @@ func RunPrecheck(ctx context.Context, deps engine.Deps) []string {
         }
     }
 
-    // Also verify non-flagged payloads; drop if they show 302 across all samples
+    // Confirm 403-flagged
+    for _, p := range flagged403 {
+        select { case <-ctx.Done(): return append([]string{}, nonflag...) ; default: }
+        all403 := true
+        var confirmedURL string
+        for _, raw := range samples {
+            u, err := url.Parse(raw)
+            if err != nil || u.Scheme == "" || u.Host == "" { continue }
+            baseURL := u.Scheme + "://" + u.Host
+            // Preserve original escaping; append payload before query string.
+            pth := u.EscapedPath()
+            if pth == "" { pth = "/" }
+            if !strings.HasSuffix(pth, "/") { pth = pth + "/" }
+            rawPath := pth + p
+            if u.RawQuery != "" { rawPath = rawPath + "?" + u.RawQuery }
+            resp, err := deps.Client.Do(baseURL, rawPath)
+            if err != nil { all403 = false; break }
+            if resp.StatusCode != 403 { all403 = false; break }
+            if confirmedURL == "" { confirmedURL = baseURL + rawPath }
+        }
+        if all403 {
+            confirmedDrop = append(confirmedDrop, p)
+            if confirmedURL != "" {
+                fmt.Printf("[scpt-precheck] Rechecking payload %q with the URL %s. 403 Confirmed. The payload %q was filtered out\n", p, confirmedURL, p)
+            } else {
+                fmt.Printf("[scpt-precheck] Rechecking payload %q. 403 Confirmed across samples. The payload was filtered out\n", p)
+            }
+        } else {
+            recovered = append(recovered, p)
+        }
+    }
+
+    // Also verify non-flagged payloads; drop if they show 302 or 403 across all samples
     final := make([]string, 0, len(nonflag)+len(recovered))
     var extraDrop []string
     for _, p := range nonflag {
         select { case <-ctx.Done(): return append(final, recovered...) ; default: }
         all302 := true
+        all403 := true
         for _, raw := range samples {
             u, err := url.Parse(raw)
             if err != nil || u.Scheme == "" || u.Host == "" { continue }
@@ -118,10 +158,12 @@ func RunPrecheck(ctx context.Context, deps engine.Deps) []string {
             if u.RawQuery != "" { path = path + "?" + u.RawQuery }
             if path != "" && !strings.HasSuffix(path, "/") { path = path + "/" }
             resp, err := deps.Client.Do(baseURL, path+p)
-            if err != nil { all302 = false; break }
-            if resp.StatusCode != 302 { all302 = false; break }
+            if err != nil { all302 = false; all403 = false; break }
+            if resp.StatusCode != 302 { all302 = false }
+            if resp.StatusCode != 403 { all403 = false }
+            if !all302 && !all403 { break }
         }
-        if all302 {
+        if all302 || all403 {
             extraDrop = append(extraDrop, p)
         } else {
             final = append(final, p)
