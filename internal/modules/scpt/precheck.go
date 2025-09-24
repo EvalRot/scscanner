@@ -23,10 +23,14 @@ import (
 // Returns the filtered payload list (may be empty). Any errors are treated as
 // no-filter (return original list).
 func RunPrecheck(ctx context.Context, deps engine.Deps) []string {
-    orig := deps.Payloads.Items()
-    if len(orig) == 0 {
-        return nil
+    var orig []string
+    if deps.Payloads != nil {
+        orig = deps.Payloads.Items()
     }
+    if len(orig) == 0 {
+        orig = defaultPayloads()
+    }
+    if len(orig) == 0 { return nil }
     base, err := deps.Opts.BuildBaseURL()
     if err != nil || base == "" {
         return orig

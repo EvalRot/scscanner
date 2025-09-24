@@ -4,4 +4,7 @@ test.txt
 urls.txt
 Designing a Secondary Context Path Traversal Scanner in Go.pdf
 dist/*
+__debug_test_build.exe
+scscanner.exe
+scscanner/pohek.exe
 .vscode/*

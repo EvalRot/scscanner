@@ -69,7 +69,7 @@ func main() {
                 return fmt.Errorf("cannot init http client: %w", err)
             }
 
-            pay := payload.NewDefault()
+            var pay *payload.Source // modules will load their own defaults
             sink := output.NewSafe(output.JSONLSink{OutputDir: opt.OutputDir})
             deps := engine.Deps{Opts: opt, Client: client, Payloads: pay, Sink: sink}
 

@@ -1,25 +1,44 @@
 {
-"version": "0.2.0",
-"configurations": [
-{
-"name": "Debug scscanner (URLs file)",
-"type": "go",
-"request": "launch",
-"mode": "debug",
-"program": "${workspaceFolder}",
-"cwd": "${workspaceFolder}",
-"args": [
-"placeholder",
-"urls.txt",
-"--urlfile",
-"--threads", "5",
-"--timeout", "5",
-"--output", "outdir",
-"--scpt"
-],
-"env": {
-"GODEBUG": "http2client=0"
-}
-}
-]
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug scscanner (basic)",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "example.com",
+        "${workspaceFolder}/urls.txt",
+        "--threads", "1",
+        "--timeout", "10"
+      ],
+      "env": {
+        "GODEBUG": "http2client=0"
+      },
+      "buildFlags": "-gcflags=all=-N -gcflags=all=-l",
+      "dlvFlags": ["--check-go-version=false"]
+    },
+    {
+      "name": "Debug scscanner (precheck)",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--scpt-precheck",
+        "--threads", "1",
+        "--timeout", "10",
+        "--followredirects=false",
+        "secure.netflix.com",
+        "urls.txt"
+      ],
+      "buildFlags": "-gcflags=all=-N -gcflags=all=-l",
+      "dlvFlags": ["--check-go-version=false"]
+    }
+  ]
 }

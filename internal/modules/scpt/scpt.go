@@ -24,9 +24,8 @@ func (Module) Name() string { return "scpt" }
 // Payloads returns the SCPT-specific payload source. Keeping a dedicated
 // instance allows other modules to use their own lists independently.
 func (Module) Payloads() *payload.Source {
-    // For now, reuse the default list. This can be tuned for SCPT later
-    // without affecting other modules.
-    return payload.NewDefault()
+    // Load payloads from the module's embedded file
+    return payload.NewFrom(defaultPayloads())
 }
 
 // Preprocess removes GET parameters from the path, since SCPT only mutates
@@ -65,8 +64,15 @@ func (Module) Preprocess(ctx context.Context, deps engine.Deps, t engine.Target,
 // and performs module-specific detection heuristics.
 // Process runs SCT payloads for a single target, using the provided base response as baseline.
 func (Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, base *httpx.Response) error {
-    // Pull the module-specific payload list
-    payloads := deps.Payloads.Items()
+    // Pull payloads: prefer override from deps (after precheck),
+    // otherwise use the module's embedded defaults.
+    var payloads []string
+    if deps.Payloads != nil {
+        payloads = deps.Payloads.Items()
+    }
+    if len(payloads) == 0 {
+        payloads = defaultPayloads()
+    }
     if len(payloads) == 0 {
         return nil
     }
