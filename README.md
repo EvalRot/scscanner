@@ -17,6 +17,8 @@ Key flags
  - `--proxy`, `--proxy-url`: proxy configuration
  - `--scpt`: enable SCPT module (default true)
  - `--scpt-precheck`: enable payload precheck to filter normalization redirects (302) and consistent WAF blocks (403)
+ - `--crlf`: enable CRLF injection module (default false)
+  - `--crlf-precheck`: enable CRLF precheck (filters payloads consistently returning 403)
 
 Behavior changes
 - Removed path-list mode (hostname + directory wordlist). Only URL-file input is supported now.
@@ -33,3 +35,30 @@ Note
 Output
 - Stdout: one line per finding, prints full URL once, payload, status, and signals.
 - JSONL: per-host file in the chosen output directory, one JSON object per line.
+
+CRLF module (`--crlf`)
+- Purpose: probe for CRLF injection and related parser confusions via path/query mutations.
+- Payloads used:
+  - `%0d%0aX-Header-<rand>: 1`
+  - `%0d%0aSet-Cookie: test_cookie_<rand>=1`
+  - `%20HTTP/X.X%20`
+  - `%20HTTP/1.1%0d%0aHost:`
+- Injection points per URL:
+  - Path: after each segment, at end, and with an extra trailing segment.
+  - Query: appended to each parameter value; seeded as `q=1<payload>` if no query present.
+- Redirects: leave `--followredirects=false` (default) to inspect intermediate 30x responses.
+- Detection evidence (per single probe; no baseline, no repetition):
+  - HTTP status `400`.
+  - Response header named `X-Header-<rand>` present (case-insensitive; value ignored).
+  - `Set-Cookie` exactly `test_cookie_<rand>=1` (attributes ignored).
+  - Body contains any: `Invalid`, `HTTP version`, `HTTP header`, `Host header` (case-insensitive).
+- Retries/429: reuses the same timeout/retry/backoff behavior as SCPT via the shared HTTP client.
+- Optional precheck (`--crlf-precheck`):
+  - Phase 1: host baseline `/rand/ + payload` and flag payloads that return 403.
+  - Phase 2: confirm on up to 3 random URLs; drop payloads that return 403 across all samples.
+
+Examples
+- Run only CRLF module:
+  - `./scscanner --crlf --scpt=false example.com urls.txt`
+- Run both SCPT and CRLF:
+  - `./scscanner --scpt --crlf example.com urls.txt`

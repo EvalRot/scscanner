@@ -13,6 +13,7 @@ import (
 	"pohek/internal/engine"
 	"pohek/internal/httpx"
 	"pohek/internal/modules/scpt"
+	"pohek/internal/modules/crlf"
 	"pohek/internal/output"
 	"pohek/internal/payload"
 )
@@ -37,7 +38,9 @@ func main() {
             &cli.BoolFlag{Name: "proxy", Value: false, Usage: "use proxy settings from environment (HTTP_PROXY/HTTPS_PROXY)"},
             &cli.StringFlag{Name: "proxy-url", Value: "", Usage: "explicit proxy URL (e.g., http://127.0.0.1:8080)"},
             &cli.BoolFlag{Name: "scpt", Value: true, Usage: "enable Secondary Context Path Traversal module"},
+            &cli.BoolFlag{Name: "crlf", Value: false, Usage: "enable CRLF injection module"},
             &cli.BoolFlag{Name: "scpt-precheck", Value: false, Usage: "enable SCPT payload precheck to filter payloads consistently returning 302 (redirect) or 403 (forbidden)"},
+            &cli.BoolFlag{Name: "crlf-precheck", Value: false, Usage: "enable CRLF payload precheck to filter payloads consistently returning 403"},
         },
         Action: func(c *cli.Context) error {
             if c.NArg() < 2 {
@@ -90,8 +93,20 @@ func main() {
                 }
                 modules = append(modules, scpt.Module{})
             }
+            if c.Bool("crlf") {
+                if c.Bool("crlf-precheck") {
+                    allowed := crlf.RunPrecheck(c.Context, deps)
+                    if len(allowed) == 0 {
+                        fmt.Printf("[crlf-precheck] All payloads were filtered or none available. Skipping CRLF module.\n")
+                    } else {
+                        modules = append(modules, crlf.New(allowed))
+                    }
+                } else {
+                    modules = append(modules, crlf.New(nil))
+                }
+            }
             if len(modules) == 0 {
-                return fmt.Errorf("no modules enabled; enable with --scpt")
+                return fmt.Errorf("no modules enabled; enable with --scpt or --crlf")
             }
 
             eng := &engine.Engine{Deps: deps, Modules: modules}

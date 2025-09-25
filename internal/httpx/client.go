@@ -23,6 +23,7 @@ type Response struct {
     Body        []byte
     RequestURL  string
     RetryAfter  time.Duration
+    Headers     http.Header
 }
 
 // Client wraps net/http.Client and request building logic (headers, cookies, method, redirects, TLS).
@@ -174,6 +175,7 @@ func (c *Client) Do(baseURL string, rawPath string) (*Response, error) {
         StatusCode:  resp.StatusCode,
         Body:        body,
         RequestURL:  resp.Request.URL.String(),
+        Headers:     resp.Header.Clone(),
     }
     // Capture Retry-After if present
     if ra := resp.Header.Get("Retry-After"); ra != "" {
