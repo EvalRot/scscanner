@@ -3,10 +3,10 @@ package crlf
 import (
     "bufio"
     "context"
-    "crypto/rand"
+    crand "crypto/rand"
     "encoding/hex"
     "fmt"
-    "math/rand"
+    mrand "math/rand"
     "net/url"
     "os"
     "strings"
@@ -137,7 +137,7 @@ func encodedByName(marker string) map[string]string {
 
 func randPath() string {
     var b [8]byte
-    _, _ = rand.Read(b[:])
+    _, _ = crand.Read(b[:])
     return hex.EncodeToString(b[:])
 }
 
@@ -150,7 +150,7 @@ func sampleURLs(filepath string, k int) []string {
     sc := bufio.NewScanner(f)
     out := make([]string, 0, k)
     count := 0
-    rand.Seed(time.Now().UnixNano())
+    mrand.Seed(time.Now().UnixNano())
     for sc.Scan() {
         raw := strings.TrimSpace(sc.Text())
         if raw == "" { continue }
@@ -160,9 +160,8 @@ func sampleURLs(filepath string, k int) []string {
         if p == "" || p == "/" { continue }
         count++
         if len(out) < k { out = append(out, raw); continue }
-        j := rand.Intn(count)
+        j := mrand.Intn(count)
         if j < k { out[j] = raw }
     }
     return out
 }
-
