@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/urfave/cli/v2"
@@ -37,8 +38,7 @@ func main() {
             &cli.StringFlag{Name: "output", Value: "no.no", Usage: "path to output directory (JSONL) or no.no for stdout"},
             &cli.BoolFlag{Name: "proxy", Value: false, Usage: "use proxy settings from environment (HTTP_PROXY/HTTPS_PROXY)"},
             &cli.StringFlag{Name: "proxy-url", Value: "", Usage: "explicit proxy URL (e.g., http://127.0.0.1:8080)"},
-            &cli.BoolFlag{Name: "scpt", Value: true, Usage: "enable Secondary Context Path Traversal module"},
-            &cli.BoolFlag{Name: "crlf", Value: false, Usage: "enable CRLF injection module"},
+            &cli.StringFlag{Name: "modules", Aliases: []string{"m"}, Value: "", Usage: "comma-separated modules to include (e.g., scpt,crlf)"},
             &cli.BoolFlag{Name: "crlf-precheck", Value: false, Usage: "enable CRLF payload precheck to filter payloads consistently returning 403"},
         },
         Action: func(c *cli.Context) error {
@@ -75,8 +75,30 @@ func main() {
             sink := output.NewSafe(output.JSONLSink{OutputDir: opt.OutputDir})
             deps := engine.Deps{Opts: opt, Client: client, Payloads: pay, Sink: sink}
 
+            // Parse modules list: -m scpt,crlf or -m crlf
+            includeSCPT := false
+            includeCRLF := false
+            if ml := strings.TrimSpace(c.String("modules")); ml != "" {
+                for _, part := range strings.Split(ml, ",") {
+                    name := strings.ToLower(strings.TrimSpace(part))
+                    switch name {
+                    case "scpt":
+                        includeSCPT = true
+                    case "crlf":
+                        includeCRLF = true
+                    case "":
+                        // skip
+                    default:
+                        fmt.Printf("[!] Unknown module name: %s (ignored)\n", name)
+                    }
+                }
+            }
+            if !includeSCPT && !includeCRLF {
+                return fmt.Errorf("no modules selected; include with -m scpt,crlf or -m crlf")
+            }
+
             modules := []engine.Module{}
-            if c.Bool("scpt") {
+            if includeSCPT {
                 // Always run SCPT precheck; if it filters everything, skip SCPT but continue with other modules
                 filtered := scpt.RunPrecheck(c.Context, deps)
                 if filtered == nil || len(filtered) == 0 {
@@ -86,7 +108,7 @@ func main() {
                     modules = append(modules, scpt.Module{})
                 }
             }
-            if c.Bool("crlf") {
+            if includeCRLF {
                 // Always run CRLF precheck; if it filters everything, skip CRLF
                 allowed := crlf.RunPrecheck(c.Context, deps)
                 if len(allowed) == 0 {
@@ -96,7 +118,7 @@ func main() {
                 }
             }
             if len(modules) == 0 {
-                return fmt.Errorf("no modules enabled; enable with --scpt or --crlf")
+                return fmt.Errorf("no modules enabled after prechecks; adjust selection with -m scpt,crlf")
             }
 
             eng := &engine.Engine{Deps: deps, Modules: modules}

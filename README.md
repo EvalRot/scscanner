@@ -15,8 +15,7 @@ Key flags
 - `--insecure`: ignore TLS validation (default true)
 - `--output`: output directory for JSONL per host (use `no.no` for stdout)
  - `--proxy`, `--proxy-url`: proxy configuration
- - `--scpt`: enable SCPT module (default true)
-  - `--crlf`: enable CRLF injection module (default false)
+ - `--modules, -m`: comma-separated modules to include (e.g., `-m scpt,crlf` or `-m crlf`). No modules are enabled by default.
   
 
 Behavior changes
@@ -58,6 +57,6 @@ CRLF module (`--crlf`)
 
 Examples
 - Run only CRLF module:
-  - `./scscanner --crlf --scpt=false example.com urls.txt`
+  - `./scscanner -m crlf example.com urls.txt`
 - Run both SCPT and CRLF:
-  - `./scscanner --scpt --crlf example.com urls.txt`
+  - `./scscanner -m scpt,crlf example.com urls.txt`
