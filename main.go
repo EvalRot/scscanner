@@ -13,8 +13,8 @@ import (
 	"pohek/internal/config"
 	"pohek/internal/engine"
 	"pohek/internal/httpx"
-	"pohek/internal/modules/scpt"
 	"pohek/internal/modules/crlf"
+	"pohek/internal/modules/scpt"
 	"pohek/internal/output"
 	"pohek/internal/payload"
 )

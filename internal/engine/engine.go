@@ -3,6 +3,8 @@ package engine
 import (
     "bufio"
     "context"
+    "fmt"
+    "net"
     "net/url"
     "os"
     "strings"
@@ -68,6 +70,25 @@ type Engine struct {
 
 // Run streams targets one-by-one and reuses a single base response per target across modules.
 func (e *Engine) Run(ctx context.Context) error {
+    // Pre-flight: DNS and HTTP accessibility check for the configured hostname.
+    // Abort early if the target host cannot be resolved or reached over HTTP(S).
+    if e.Deps.Opts != nil && e.Deps.Client != nil {
+        host := e.Deps.Opts.Hostname
+        if strings.TrimSpace(host) == "" {
+            return fmt.Errorf("hostname is empty")
+        }
+        if _, err := net.LookupHost(host); err != nil {
+            return fmt.Errorf("hostname %s not resolvable: %v", host, err)
+        }
+        if base, err := e.Deps.Opts.BuildBaseURL(); err == nil && base != "" {
+            if _, err := e.Deps.Client.Do(base, "/"); err != nil {
+                return fmt.Errorf("HTTP probe to %s/ failed: %v", base, err)
+            }
+        } else if err != nil {
+            return err
+        }
+    }
+
     threads := e.Deps.Opts.Threads
     if threads <= 0 { threads = 1 }
 
