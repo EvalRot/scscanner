@@ -39,7 +39,6 @@ func main() {
             &cli.StringFlag{Name: "proxy-url", Value: "", Usage: "explicit proxy URL (e.g., http://127.0.0.1:8080)"},
             &cli.BoolFlag{Name: "scpt", Value: true, Usage: "enable Secondary Context Path Traversal module"},
             &cli.BoolFlag{Name: "crlf", Value: false, Usage: "enable CRLF injection module"},
-            &cli.BoolFlag{Name: "scpt-precheck", Value: false, Usage: "enable SCPT payload precheck to filter payloads consistently returning 302 (redirect) or 403 (forbidden)"},
             &cli.BoolFlag{Name: "crlf-precheck", Value: false, Usage: "enable CRLF payload precheck to filter payloads consistently returning 403"},
         },
         Action: func(c *cli.Context) error {
@@ -78,31 +77,22 @@ func main() {
 
             modules := []engine.Module{}
             if c.Bool("scpt") {
-                // Optional precheck to filter out payloads that trigger normalization redirects (302)
-                // or are blocked by WAF consistently (403)
-                if c.Bool("scpt-precheck") {
-                    filtered := scpt.RunPrecheck(c.Context, deps)
-                    // If precheck removed all payloads or there were none, stop scanning gracefully
-                    if filtered == nil || len(filtered) == 0 {
-                        fmt.Printf("[scpt-precheck] All payloads were filtered or none available. Stopping scan.\n")
-                        return nil
-                    }
-                    if len(filtered) > 0 {
-                        deps.Payloads = payload.NewFrom(filtered)
-                    }
+                // Always run SCPT precheck; if it filters everything, skip SCPT but continue with other modules
+                filtered := scpt.RunPrecheck(c.Context, deps)
+                if filtered == nil || len(filtered) == 0 {
+                    fmt.Printf("[scpt-precheck] All payloads were filtered or none available. Skipping SCPT module.\n")
+                } else {
+                    deps.Payloads = payload.NewFrom(filtered)
+                    modules = append(modules, scpt.Module{})
                 }
-                modules = append(modules, scpt.Module{})
             }
             if c.Bool("crlf") {
-                if c.Bool("crlf-precheck") {
-                    allowed := crlf.RunPrecheck(c.Context, deps)
-                    if len(allowed) == 0 {
-                        fmt.Printf("[crlf-precheck] All payloads were filtered or none available. Skipping CRLF module.\n")
-                    } else {
-                        modules = append(modules, crlf.New(allowed))
-                    }
+                // Always run CRLF precheck; if it filters everything, skip CRLF
+                allowed := crlf.RunPrecheck(c.Context, deps)
+                if len(allowed) == 0 {
+                    fmt.Printf("[crlf-precheck] All payloads were filtered or none available. Skipping CRLF module.\n")
                 } else {
-                    modules = append(modules, crlf.New(nil))
+                    modules = append(modules, crlf.New(allowed))
                 }
             }
             if len(modules) == 0 {

@@ -16,18 +16,17 @@ Key flags
 - `--output`: output directory for JSONL per host (use `no.no` for stdout)
  - `--proxy`, `--proxy-url`: proxy configuration
  - `--scpt`: enable SCPT module (default true)
- - `--scpt-precheck`: enable payload precheck to filter normalization redirects (302) and consistent WAF blocks (403)
- - `--crlf`: enable CRLF injection module (default false)
-  - `--crlf-precheck`: enable CRLF precheck (filters payloads consistently returning 403)
+  - `--crlf`: enable CRLF injection module (default false)
+  
 
 Behavior changes
 - Removed path-list mode (hostname + directory wordlist). Only URL-file input is supported now.
 - The `--urlfile` flag was removed; the tool always expects absolute URLs in the input file.
 
-SCPT payload precheck (`--scpt-precheck`)
-1) Host baseline: requests `/<random>/ + payload` on the base host. Payloads that return 302 are dropped.
-2) Sample verify: samples up to 3 URLs from the input file. If a payload returns 302 on all samples, it’s dropped.
-3) Scanning proceeds with the filtered payloads only.
+SCPT payload precheck (runs by default)
+1) Host baseline: requests `/<random>/ + payload` on the base host. Payloads that return 302 or 403 are flagged.
+2) Sample verify: samples up to 3 URLs from the input file. If a payload returns 302 or 403 on all samples, it’s dropped.
+3) Scanning proceeds with the filtered payloads only for SCPT.
 
 Note
 - If all payloads are filtered by precheck (302/403), the scan stops early with a message instead of proceeding with an empty set.
@@ -53,7 +52,7 @@ CRLF module (`--crlf`)
   - `Set-Cookie` exactly `test_cookie_<rand>=1` (attributes ignored).
   - Body contains any: `Invalid`, `HTTP version`, `HTTP header`, `Host header` (case-insensitive).
 - Retries/429: reuses the same timeout/retry/backoff behavior as SCPT via the shared HTTP client.
-- Optional precheck (`--crlf-precheck`):
+- Precheck (runs by default for CRLF):
   - Phase 1: host baseline `/rand/ + payload` and flag payloads that return 403.
   - Phase 2: confirm on up to 3 random URLs; drop payloads that return 403 across all samples.
 

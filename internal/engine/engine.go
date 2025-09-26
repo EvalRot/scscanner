@@ -40,6 +40,13 @@ type Module interface {
     Process(ctx context.Context, deps Deps, t Target, base *httpx.Response) error
 }
 
+// DedupKeyer is an optional interface a module can implement to provide
+// a canonical per-target key for de-duplication. If not implemented,
+// the engine falls back to BaseURL + " " + Path (including query).
+type DedupKeyer interface {
+    DedupKey(t Target) string
+}
+
 // Preprocessor is an optional interface a module can implement to adjust the
 // target (e.g., strip/add query params, normalize path) and optionally supply
 // a module-specific baseline response before processing.
@@ -66,6 +73,8 @@ func (e *Engine) Run(ctx context.Context) error {
 
     jobs := make(chan Target, threads)
     var wg sync.WaitGroup
+    // Global seen-set across all workers and modules for this run
+    var seen sync.Map // map[string]struct{}
 
     worker := func() {
         defer wg.Done()
@@ -92,6 +101,18 @@ func (e *Engine) Run(ctx context.Context) error {
                             mbase = nb
                         }
                     }
+                }
+                // Compute module-specific dedup key if available
+                var key string
+                if dk, ok := m.(DedupKeyer); ok {
+                    key = dk.DedupKey(mt)
+                } else {
+                    key = mt.BaseURL + " " + mt.Path
+                }
+                full := m.Name() + ":" + key
+                if _, loaded := seen.LoadOrStore(full, struct{}{}); loaded {
+                    // Already processed for this module; skip
+                    continue
                 }
                 _ = m.Process(ctx, e.Deps, mt, mbase)
             }

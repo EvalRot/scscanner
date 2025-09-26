@@ -46,6 +46,7 @@ func RunPrecheck(ctx context.Context, deps engine.Deps) []string {
     var (
         flagged302 []string // 302 on /<rand>/ – need confirmation on real URLs
         flagged403 []string // 403 on /<rand>/ – need confirmation on real URLs
+        flagged406 []string // special-case for "..\\" and "..%5c" – require 406 on /<rand>/ and all samples
         nonflag    []string // not 302/403 – still verify on samples to be safe
     )
     for _, p := range orig {
@@ -55,6 +56,12 @@ func RunPrecheck(ctx context.Context, deps engine.Deps) []string {
         if err != nil {
             // Keep conservative: treat as non-flagged so it stays for scanning
             nonflag = append(nonflag, p)
+            continue
+        }
+        // Special-case: if payload is "..\\" or "..%5c" and returns 406 on /<rand>/, flag for confirmation
+        if (p == "..\\" || p == "..%5c") && resp.StatusCode == 406 {
+            fmt.Printf("[scpt-precheck] The payload %q returns 406, will check again with URLs from the file\n", p)
+            flagged406 = append(flagged406, p)
             continue
         }
         switch resp.StatusCode {
@@ -143,6 +150,38 @@ func RunPrecheck(ctx context.Context, deps engine.Deps) []string {
                 fmt.Printf("[scpt-precheck] Rechecking payload %q with the URL %s. 403 Confirmed. The payload %q was filtered out\n", p, confirmedURL, p)
             } else {
                 fmt.Printf("[scpt-precheck] Rechecking payload %q. 403 Confirmed across samples. The payload was filtered out\n", p)
+            }
+        } else {
+            recovered = append(recovered, p)
+        }
+    }
+
+    // Confirm 406-flagged (only for backslash variants) – drop if 406 on all samples
+    for _, p := range flagged406 {
+        select { case <-ctx.Done(): return append([]string{}, nonflag...) ; default: }
+        all406 := true
+        var confirmedURL string
+        for _, raw := range samples {
+            u, err := url.Parse(raw)
+            if err != nil || u.Scheme == "" || u.Host == "" { continue }
+            baseURL := u.Scheme + "://" + u.Host
+            // Preserve original escaping; append payload before query string.
+            pth := u.EscapedPath()
+            if pth == "" { pth = "/" }
+            if !strings.HasSuffix(pth, "/") { pth = pth + "/" }
+            rawPath := pth + p
+            if u.RawQuery != "" { rawPath = rawPath + "?" + u.RawQuery }
+            resp, err := deps.Client.Do(baseURL, rawPath)
+            if err != nil { all406 = false; break }
+            if resp.StatusCode != 406 { all406 = false; break }
+            if confirmedURL == "" { confirmedURL = baseURL + rawPath }
+        }
+        if all406 {
+            confirmedDrop = append(confirmedDrop, p)
+            if confirmedURL != "" {
+                fmt.Printf("[scpt-precheck] Rechecking payload %q with the URL %s. 406 Confirmed. The payload %q was filtered out\n", p, confirmedURL, p)
+            } else {
+                fmt.Printf("[scpt-precheck] Rechecking payload %q. 406 Confirmed across samples. The payload was filtered out\n", p)
             }
         } else {
             recovered = append(recovered, p)

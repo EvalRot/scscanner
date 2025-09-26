@@ -21,6 +21,18 @@ type Module struct{}
 
 func (Module) Name() string { return "scpt" }
 
+// DedupKey implements engine.DedupKeyer. SCPT ignores query and fragment and
+// operates on parent path context, so dedup on normalized path only.
+func (Module) DedupKey(t engine.Target) string {
+    p := t.Path
+    if i := strings.IndexByte(p, '?'); i >= 0 { p = p[:i] }
+    if j := strings.IndexByte(p, '#'); j >= 0 { p = p[:j] }
+    if p == "" { p = "/" }
+    if !strings.HasPrefix(p, "/") { p = "/" + p }
+    if !strings.HasSuffix(p, "/") { p = p + "/" }
+    return t.BaseURL + " " + p
+}
+
 // Payloads returns the SCPT-specific payload source. Keeping a dedicated
 // instance allows other modules to use their own lists independently.
 func (Module) Payloads() *payload.Source {

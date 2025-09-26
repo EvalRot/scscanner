@@ -1,17 +1,17 @@
 package crlf
 
 import (
-    "context"
-    "crypto/rand"
-    "encoding/hex"
-    "fmt"
-    "net/url"
-    "strings"
-    "time"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"net/url"
+	"strings"
+	"time"
 
-    "pohek/internal/engine"
-    "pohek/internal/httpx"
-    "pohek/internal/output"
+	"pohek/internal/engine"
+	"pohek/internal/httpx"
+	"pohek/internal/output"
 )
 
 // Module implements CRLF injection checks as a pluggable module.
@@ -21,6 +21,12 @@ type Module struct{
 }
 
 func (Module) Name() string { return "crlf" }
+
+// DedupKey implements engine.DedupKeyer. CRLF treats path+query distinctly,
+// so use the raw target path (including query) as part of the key.
+func (Module) DedupKey(t engine.Target) string {
+    return t.BaseURL + " " + t.Path
+}
 
 // New creates a CRLF module with an optional allowed payload name list from precheck.
 func New(allowed []string) Module {
@@ -125,27 +131,27 @@ func (m Module) Process(ctx context.Context, deps engine.Deps, t engine.Target, 
             if resp.StatusCode == 400 {
                 signals["status400"] = true
                 notes = append(notes, "HTTP 400 status")
-                emitFinding(deps, t.BaseURL, t.Path, c.p.name, resp, signals, notes)
+                emitFinding(deps, t.BaseURL, t.Path, t.BaseURL+c.raw, c.p.encoded, resp, signals, notes)
             }
 
             // Header: X-Header-<marker> present (value ignored)
             if hasHeaderCI(resp, "X-Header-"+marker) {
                 signals = map[string]bool{"status400": resp.StatusCode == 400, "xheader": true, "setcookie": false, "keyword": false}
                 notes = []string{"X-Header-" + marker + " present"}
-                emitFinding(deps, t.BaseURL, t.Path, c.p.name, resp, signals, notes)
+                emitFinding(deps, t.BaseURL, t.Path, t.BaseURL+c.raw, c.p.encoded, resp, signals, notes)
             }
 
             // Set-Cookie exact match of injected cookie
             if c.p.cookieName != "" && hasInjectedCookie(resp, c.p.cookieName, c.p.cookieVal) {
                 signals = map[string]bool{"status400": resp.StatusCode == 400, "xheader": false, "setcookie": true, "keyword": false}
                 notes = []string{fmt.Sprintf("Set-Cookie %s=%s present", c.p.cookieName, c.p.cookieVal)}
-                emitFinding(deps, t.BaseURL, t.Path, c.p.name, resp, signals, notes)
+                emitFinding(deps, t.BaseURL, t.Path, t.BaseURL+c.raw, c.p.encoded, resp, signals, notes)
             }
 
             if kw, ok := bodyHasKeyword(resp.Body); ok {
                 signals = map[string]bool{"status400": resp.StatusCode == 400, "xheader": false, "setcookie": false, "keyword": true}
                 notes = []string{"body contains: " + kw}
-                emitFinding(deps, t.BaseURL, t.Path, c.p.name, resp, signals, notes)
+                emitFinding(deps, t.BaseURL, t.Path, t.BaseURL+c.raw, c.p.encoded, resp, signals, notes)
             }
             break
         }
@@ -169,8 +175,8 @@ type candidate struct {
 
 func buildPayloads(marker string) []payload {
     return []payload{
-        {name: "x-header", encoded: "%0d%0aX-Header-" + marker + ": 1"},
-        {name: "set-cookie", encoded: "%0d%0aSet-Cookie: test_cookie_" + marker + "=1", cookieName: "test_cookie_" + marker, cookieVal: "1"},
+        {name: "x-header", encoded: "%0d%0aX-Header-" + marker + ":%201"},
+        {name: "set-cookie", encoded: "%0d%0aSet-Cookie:%20test_cookie_" + marker + "=1", cookieName: "test_cookie_" + marker, cookieVal: "1"},
         {name: "http-x.x", encoded: "%20HTTP/X.X%20"},
         {name: "http-1.1-host", encoded: "%20HTTP/1.1%0d%0aHost:"},
     }
@@ -232,15 +238,14 @@ func bodyHasKeyword(body []byte) (string, bool) {
     return "", false
 }
 
-func emitFinding(deps engine.Deps, baseURL, path, payload string, resp *httpx.Response, signals map[string]bool, notes []string) {
-    // Build stable URL value using response.RequestURL to reflect actual probe
+func emitFinding(deps engine.Deps, baseURL, path, urlSent, payload string, resp *httpx.Response, signals map[string]bool, notes []string) {
     f := &output.Finding{
         Module:    "crlf",
         Timestamp: time.Now(),
         Host:      baseURL,
         Path:      path,
         Payload:   payload,
-        URL:       resp.RequestURL,
+        URL:       urlSent,
         Signals:   signals,
         Notes:     notes,
         Status:    resp.StatusCode,

@@ -49,8 +49,12 @@ func (s *SafeSink) Write(f *Finding) error {
 type StdoutSink struct{}
 
 func (s StdoutSink) Write(f *Finding) error {
-    // Build a stable full URL that always includes scheme://host and the traversal payload.
-    // Using Request.URL with an opaque path can lose the host (prints as https:/...).
+    if strings.EqualFold(f.Module, "crlf") {
+        // For CRLF, print the exact URL that was sent (with encoded payload inside)
+        fmt.Printf("[+] url=%s payload=%q status=%d signals=%v\n", f.URL, f.Payload, f.Status, f.Signals)
+        return nil
+    }
+    // Default (SCPT): construct URL from base + path + payload
     base := strings.TrimRight(f.Host, "/")
     path := f.Path
     if path == "" { path = "/" }
